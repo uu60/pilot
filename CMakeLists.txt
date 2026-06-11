@@ -1,17 +1,14 @@
-cmake_minimum_required(VERSION 4.2)
-project(pilot)
+cmake_minimum_required(VERSION 3.18)
+project(pilot LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
-
-# Set base optimization flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(MPI REQUIRED)
-find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED CONFIG)
 
 add_subdirectory(runtime)
-add_subdirectory(primitives)
+add_subdirectory(primitive)
 add_subdirectory(db)
-add_subdirectory(db/benchmark)
+
+add_executable(pilot main.cpp)
+target_link_libraries(pilot PRIVATE pilot_db)

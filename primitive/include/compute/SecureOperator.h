@@ -1,33 +1,46 @@
 #ifndef PILOT_SECUREOPERATOR_H
 #define PILOT_SECUREOPERATOR_H
+
 #include <cstdint>
+#include <vector>
+
+#include "utils/Math.h"
 
 class SecureOperator {
 public:
     static constexpr int NO_CLIENT_COMPUTE = -1;
+
     int _width{};
+    std::vector<int64_t> _results{};
+    std::vector<int64_t> *_xis{};
+    std::vector<int64_t> *_yis{};
+    std::vector<int64_t> _zis{};
+    bool _dx{};
+    bool _dy{};
 
 protected:
-    int _startMsgTag{};
-    int _currentMsgTag{};
+    int _messageTag{};
 
 public:
+    explicit SecureOperator(int width, int messageTag = 0)
+        : _width(width), _messageTag(messageTag) {}
 
-    virtual ~SecureOperator() = default;
-
-    explicit SecureOperator(int width, int msgTagOffset) : _width(width),
-        _startMsgTag(msgTagOffset), _currentMsgTag(msgTagOffset) {
+    virtual ~SecureOperator() {
+        if (_dx) delete _xis;
+        if (_dy) delete _yis;
     }
 
     virtual SecureOperator *execute() = 0;
-
     virtual SecureOperator *reconstruct(int clientRank) = 0;
 
 protected:
     [[nodiscard]] int64_t ring(int64_t raw) const {
+        return Math::ring(raw, _width);
+    }
 
+    [[nodiscard]] int buildTag() const {
+        return _messageTag;
     }
 };
 
-
-#endif //PILOT_SECUREOPERATOR_H
+#endif
