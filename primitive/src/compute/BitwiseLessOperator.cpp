@@ -55,19 +55,6 @@ BitwiseLessOperator *BitwiseLessOperator::execute() {
     return this;
 }
 
-BitwiseLessOperator *BitwiseLessOperator::setBmts(std::vector<BitwiseBmt> *bmts) {
-    _bmts = bmts;
-    return this;
-}
-
-int BitwiseLessOperator::tagStride() {
-    return BitwiseAndOperator::tagStride();
-}
-
-int BitwiseLessOperator::bmtCount(int num, int width) {
-    return (static_cast<int>(std::floor(std::log2(width))) + 3) * BitwiseAndOperator::bmtCount(num, width);
-}
-
 std::vector<int64_t> BitwiseLessOperator::shiftGreater(std::vector<int64_t> &in, int r) const {
     int part_size = 1 << r;
     if (part_size > _width) return in;

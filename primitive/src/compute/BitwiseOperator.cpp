@@ -5,8 +5,8 @@
 
 #include <stdexcept>
 
-BitwiseOperator::BitwiseOperator(std::vector<int64_t> &zs, int width, int messageTag, int clientRank)
-    : SecureOperator(width, messageTag) {
+BitwiseOperator::BitwiseOperator(std::vector<int64_t> &zs, int width, int ioTag, int clientRank)
+    : SecureOperator(width, ioTag) {
     if (clientRank < 0) {
         _zis = zs;
     } else if (Comm::rank() == clientRank) {
@@ -19,18 +19,18 @@ BitwiseOperator::BitwiseOperator(std::vector<int64_t> &zs, int width, int messag
             zv0.push_back(z0);
             zv1.push_back(z1);
         }
-        auto r0 = Comm::sendAsync(zv0, _width, Comm::SERVER0_RANK, buildTag());
-        auto r1 = Comm::sendAsync(zv1, _width, Comm::SERVER1_RANK, buildTag());
+        auto r0 = Comm::sendAsync(zv0, _width, Comm::SERVER0_RANK, buildIoTag());
+        auto r1 = Comm::sendAsync(zv1, _width, Comm::SERVER1_RANK, buildIoTag());
         Comm::wait(r0);
         Comm::wait(r1);
     } else if (Comm::isServer()) {
-        Comm::receive(_zis, _width, clientRank, buildTag());
+        Comm::receive(_zis, _width, clientRank, buildIoTag());
     }
 }
 
 BitwiseOperator::BitwiseOperator(std::vector<int64_t> *xs, std::vector<int64_t> *ys, int width,
-                                           int messageTag, int clientRank)
-    : SecureOperator(width, messageTag) {
+                                           int ioTag, int clientRank)
+    : SecureOperator(width, ioTag) {
     if (clientRank < 0) {
         _xis = xs;
         _yis = ys;
@@ -51,13 +51,13 @@ BitwiseOperator::BitwiseOperator(std::vector<int64_t> *xs, std::vector<int64_t> 
             v0.push_back(y0);
             v1.push_back(y1);
         }
-        auto r0 = Comm::sendAsync(v0, _width, Comm::SERVER0_RANK, buildTag());
-        auto r1 = Comm::sendAsync(v1, _width, Comm::SERVER1_RANK, buildTag());
+        auto r0 = Comm::sendAsync(v0, _width, Comm::SERVER0_RANK, buildIoTag());
+        auto r1 = Comm::sendAsync(v1, _width, Comm::SERVER1_RANK, buildIoTag());
         Comm::wait(r0);
         Comm::wait(r1);
     } else if (Comm::isServer()) {
         std::vector<int64_t> temp;
-        Comm::receive(temp, _width, clientRank, buildTag());
+        Comm::receive(temp, _width, clientRank, buildIoTag());
         const size_t size = temp.size() / 2;
         _xis = new std::vector<int64_t>(size);
         _yis = new std::vector<int64_t>(size);
@@ -72,11 +72,11 @@ BitwiseOperator::BitwiseOperator(std::vector<int64_t> *xs, std::vector<int64_t> 
 
 BitwiseOperator *BitwiseOperator::reconstruct(int clientRank) {
     if (Comm::isServer()) {
-        Comm::send(_zis, _width, clientRank, buildTag());
+        Comm::send(_zis, _width, clientRank, buildIoTag());
     } else if (Comm::rank() == clientRank) {
         std::vector<int64_t> temp0, temp1;
-        Comm::receive(temp0, _width, Comm::SERVER0_RANK, buildTag());
-        Comm::receive(temp1, _width, Comm::SERVER1_RANK, buildTag());
+        Comm::receive(temp0, _width, Comm::SERVER0_RANK, buildIoTag());
+        Comm::receive(temp1, _width, Comm::SERVER1_RANK, buildIoTag());
         _results.clear();
         _results.reserve(temp0.size());
         for (size_t i = 0; i < temp0.size(); ++i) {

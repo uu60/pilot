@@ -2,7 +2,6 @@
 #define PILOT_BITWISE_MUTEX_OPERATOR_H
 
 #include "compute/BitwiseOperator.h"
-#include "intermediate/item/BitwiseBmt.h"
 
 #include <atomic>
 
@@ -12,7 +11,6 @@ public:
     inline static std::atomic_int64_t _totalTime = 0;
 
 private:
-    std::vector<BitwiseBmt> *_bmts{};
     bool _bidir{};
 
 public:
@@ -25,13 +23,8 @@ public:
     ~BitwiseMutexOperator() override;
 
     BitwiseMutexOperator *execute() override;
-    BitwiseMutexOperator *setBmts(std::vector<BitwiseBmt> *bmts);
-
-    static int tagStride();
-    static int bmtCount(int num, int width);
 
 private:
-    bool prepareBmts(std::vector<BitwiseBmt> &bmts);
     void execute0();
     void executeBidirectionally();
 };

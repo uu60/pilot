@@ -33,20 +33,10 @@ BitwiseMutexOperator::~BitwiseMutexOperator() {
     delete _conds_i;
 }
 
-bool BitwiseMutexOperator::prepareBmts(std::vector<BitwiseBmt> &bmts) {
-    if (_bmts != nullptr) {
-        bmts = std::move(*_bmts);
-        return true;
-    }
-    return false;
-}
-
 void BitwiseMutexOperator::execute0() {
-    std::vector<BitwiseBmt> bmts;
-    bool gotBmt = prepareBmts(bmts);
     const auto num = _conds_i->size();
     auto zis = BitwiseAndOperator(_xis, _yis, _conds_i, _width)
-            .setBmts(gotBmt ? &bmts : nullptr)->execute()->_zis;
+            .execute()->_zis;
     _zis.resize(num);
     for (size_t i = 0; i < num; ++i) {
         _zis[i] = ring(zis[i] ^ (*_yis)[i] ^ zis[num + i]);
@@ -54,11 +44,9 @@ void BitwiseMutexOperator::execute0() {
 }
 
 void BitwiseMutexOperator::executeBidirectionally() {
-    std::vector<BitwiseBmt> bmts;
-    bool gotBmt = prepareBmts(bmts);
     const auto num = _xis->size();
     auto zis = BitwiseAndOperator(_xis, _yis, _conds_i, _width)
-            .setBmts(gotBmt ? &bmts : nullptr)->execute()->_zis;
+            .execute()->_zis;
     _zis.resize(num * 2);
     for (size_t i = 0; i < num; ++i) {
         _zis[i] = ring(zis[i] ^ (*_yis)[i] ^ zis[num + i]);
@@ -70,17 +58,4 @@ BitwiseMutexOperator *BitwiseMutexOperator::execute() {
     if (Comm::isClient()) return this;
     if (_bidir) executeBidirectionally(); else execute0();
     return this;
-}
-
-BitwiseMutexOperator *BitwiseMutexOperator::setBmts(std::vector<BitwiseBmt> *bmts) {
-    _bmts = bmts;
-    return this;
-}
-
-int BitwiseMutexOperator::tagStride() {
-    return BitwiseAndOperator::tagStride();
-}
-
-int BitwiseMutexOperator::bmtCount(int num, int width) {
-    return 2 * BitwiseAndOperator::bmtCount(num, width);
 }

@@ -22,8 +22,6 @@ BitwiseEqualOperator *BitwiseEqualOperator::execute() {
     }
 
     int activeWidth = _width;
-    size_t bmtOffset = 0;
-    const bool gotBmt = _bmts != nullptr;
 
     while (activeWidth > 1) {
         const int pairCountPerRecord = activeWidth / 2;
@@ -49,16 +47,8 @@ BitwiseEqualOperator *BitwiseEqualOperator::execute() {
 
         std::vector<int64_t> andResult;
         if (!lhs.empty()) {
-            std::vector<BitwiseBmt> roundBmts;
-            if (gotBmt) {
-                auto roundBmtCount = BitwiseAndOperator::bmtCount(static_cast<int>(lhs.size()), 1);
-                roundBmts.assign(_bmts->begin() + static_cast<long>(bmtOffset),
-                                 _bmts->begin() + static_cast<long>(bmtOffset + roundBmtCount));
-                bmtOffset += roundBmtCount;
-            }
             andResult = BitwiseAndOperator(&lhs, &rhs, 1, NO_CLIENT_COMPUTE)
-                    .setBmts(gotBmt ? &roundBmts : nullptr)
-                    ->execute()
+                    .execute()
                     ->_zis;
         }
 
@@ -80,23 +70,4 @@ BitwiseEqualOperator *BitwiseEqualOperator::execute() {
 
     _zis = std::move(values);
     return this;
-}
-
-BitwiseEqualOperator *BitwiseEqualOperator::setBmts(std::vector<BitwiseBmt> *bmts) {
-    _bmts = bmts;
-    return this;
-}
-
-int BitwiseEqualOperator::tagStride() {
-    return BitwiseAndOperator::tagStride();
-}
-
-int BitwiseEqualOperator::bmtCount(int num, int width) {
-    int count = 0;
-    int activeWidth = width;
-    while (activeWidth > 1) {
-        count += BitwiseAndOperator::bmtCount(num * (activeWidth / 2), 1);
-        activeWidth = (activeWidth + 1) / 2;
-    }
-    return count;
 }

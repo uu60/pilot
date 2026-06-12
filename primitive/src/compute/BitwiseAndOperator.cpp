@@ -3,23 +3,18 @@
 #include "comm/Comm.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
+#include "intermediate/item/BitwiseBmt.h"
 #include "utils/Math.h"
 
 #include <algorithm>
 #include <stdexcept>
 
-int BitwiseAndOperator::prepareBmts(std::vector<BitwiseBmt> &bmts) {
-    if (_bmts != nullptr) {
-        bmts = std::move(*_bmts);
-        return static_cast<int>(bmts.size());
-    }
-
+void BitwiseAndOperator::prepareBmts(std::vector<BitwiseBmt> &bmts) {
     const auto actualBmtCount = static_cast<int>(_xis->size() * (_doWithConditions ? 2 : 1));
     if (actualBmtCount > Conf::IN_PATH_BMT_BUNDLE_SIZE) {
         throw std::runtime_error("BitwiseAnd batch exceeds fixed in-path BMT bundle size.");
     }
     bmts = IntermediateDataSupport::pollBitwiseBmts(Conf::IN_PATH_BMT_BUNDLE_SIZE, 64);
-    return actualBmtCount;
 }
 
 BitwiseAndOperator::BitwiseAndOperator(std::vector<int64_t> *xs, std::vector<int64_t> *ys,
@@ -38,19 +33,6 @@ BitwiseAndOperator *BitwiseAndOperator::execute() {
         execute0();
     }
     return this;
-}
-
-int BitwiseAndOperator::tagStride() {
-    return 1;
-}
-
-BitwiseAndOperator *BitwiseAndOperator::setBmts(std::vector<BitwiseBmt> *bmts) {
-    _bmts = bmts;
-    return this;
-}
-
-int BitwiseAndOperator::bmtCount(int num, int width) {
-    return num;
 }
 
 void BitwiseAndOperator::execute0() {

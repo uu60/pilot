@@ -9,7 +9,6 @@
 
 class BitwiseAndOperator : public BitwiseOperator {
 private:
-    std::vector<BitwiseBmt> *_bmts{};
     std::vector<int64_t> *_conds_i{};
     bool _doWithConditions{};
 
@@ -24,13 +23,9 @@ public:
                             int width);
 
     BitwiseAndOperator *execute() override;
-    BitwiseAndOperator *setBmts(std::vector<BitwiseBmt> *bmts);
-
-    static int tagStride();
-    static int bmtCount(int num, int width);
 
 private:
-    int prepareBmts(std::vector<BitwiseBmt> &bmts);
+    void prepareBmts(std::vector<BitwiseBmt> &bmts);
     void execute0();
     void executeForMutex();
 };

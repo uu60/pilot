@@ -19,11 +19,11 @@ public:
     bool _dy{};
 
 protected:
-    int _messageTag{};
+    int _ioTag{};
 
 public:
-    explicit SecureOperator(int width, int messageTag = 0)
-        : _width(width), _messageTag(messageTag) {}
+    explicit SecureOperator(int width, int ioTag = 0)
+        : _width(width), _ioTag(ioTag) {}
 
     virtual ~SecureOperator() {
         if (_dx) delete _xis;
@@ -38,8 +38,8 @@ protected:
         return Math::ring(raw, _width);
     }
 
-    [[nodiscard]] int buildTag() const {
-        return _messageTag;
+    [[nodiscard]] int buildIoTag() const {
+        return _ioTag;
     }
 };
 
