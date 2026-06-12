@@ -14,6 +14,9 @@ Table::Table(std::string tableName, std::vector<std::string> fieldNames,
         _fieldWidths.push_back(32);
     }
     for (int width: _fieldWidths) {
+        if (width <= 0 || width > 64) {
+            throw std::runtime_error("Pilot supports field width in range [1, 64].");
+        }
         _maxWidth = std::max(_maxWidth, width);
     }
     _dataCols.resize(_fieldNames.size());

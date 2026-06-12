@@ -21,14 +21,11 @@ struct BitwiseBmt {
         if (width >= 64) {
             return bmts[index];
         }
-        const int per = 64 / width;
-        const auto &src = bmts[index / per];
-        const int off = (index % per) * width;
-        const int64_t mask = width == 64 ? -1LL : ((1LL << width) - 1);
+        const auto &src = bmts[index];
         return BitwiseBmt{
-            Math::ring((src._a >> off) & mask, width),
-            Math::ring((src._b >> off) & mask, width),
-            Math::ring((src._c >> off) & mask, width)
+            Math::ring(src._a, width),
+            Math::ring(src._b, width),
+            Math::ring(src._c, width)
         };
     }
 };

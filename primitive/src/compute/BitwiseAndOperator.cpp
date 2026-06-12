@@ -14,14 +14,11 @@ int BitwiseAndOperator::prepareBmts(std::vector<BitwiseBmt> &bmts) {
         return static_cast<int>(bmts.size());
     }
 
-    const size_t num = _xis->size() * (_doWithConditions ? 2 : 1);
-    const int64_t totalBits = static_cast<int64_t>(num) * _width;
-    const int actualBmtCount = totalBits <= 64 ? 1 : static_cast<int>((totalBits + 63) / 64);
+    const auto actualBmtCount = static_cast<int>(_xis->size() * (_doWithConditions ? 2 : 1));
     if (actualBmtCount > Conf::IN_PATH_BMT_BUNDLE_SIZE) {
         throw std::runtime_error("BitwiseAnd batch exceeds fixed in-path BMT bundle size.");
     }
-    bmts = IntermediateDataSupport::pollBitwiseBmts(Conf::IN_PATH_BMT_BUNDLE_SIZE,
-                                                    totalBits <= 64 ? static_cast<int>(totalBits) : 64);
+    bmts = IntermediateDataSupport::pollBitwiseBmts(Conf::IN_PATH_BMT_BUNDLE_SIZE, 64);
     return actualBmtCount;
 }
 
@@ -53,16 +50,14 @@ BitwiseAndOperator *BitwiseAndOperator::setBmts(std::vector<BitwiseBmt> *bmts) {
 }
 
 int BitwiseAndOperator::bmtCount(int num, int width) {
-    return (num * width + 63) / 64;
+    return num;
 }
 
 void BitwiseAndOperator::execute0() {
     std::vector<BitwiseBmt> bmts;
-    const int bc = prepareBmts(bmts);
+    prepareBmts(bmts);
     const int num = static_cast<int>(_xis->size());
-    const int paddedNum = _width >= 64
-                              ? Conf::IN_PATH_BMT_BUNDLE_SIZE
-                              : std::max(num, (Conf::IN_PATH_BMT_BUNDLE_SIZE * 64 + _width - 1) / _width);
+    const int paddedNum = std::max(num, Conf::IN_PATH_BMT_BUNDLE_SIZE);
 
     std::vector<int64_t> efi(paddedNum * 2, 0);
     if (_width < 64) {
@@ -89,7 +84,7 @@ void BitwiseAndOperator::execute0() {
 
     _zis.resize(num);
     const int64_t extendedRank = Comm::rank() ? ring(-1ll) : 0;
-    if (_width < 64 && bc != -2) {
+    if (_width < 64) {
         for (int i = 0; i < num; i++) {
             const int64_t e = efs[i];
             const int64_t f = efs[paddedNum + i];
@@ -108,16 +103,13 @@ void BitwiseAndOperator::execute0() {
 
 void BitwiseAndOperator::executeForMutex() {
     std::vector<BitwiseBmt> bmts;
-    const int bc = prepareBmts(bmts);
+    prepareBmts(bmts);
     const int num = static_cast<int>(_xis->size());
     const int condNum = static_cast<int>(_conds_i->size());
-    const int paddedItems = _width >= 64
-                                ? Conf::IN_PATH_BMT_BUNDLE_SIZE
-                                : (Conf::IN_PATH_BMT_BUNDLE_SIZE * 64 + _width - 1) / _width;
-    const int paddedNum = std::max(num, (paddedItems + 1) / 2);
+    const int paddedNum = std::max(num, (Conf::IN_PATH_BMT_BUNDLE_SIZE + 1) / 2);
 
     std::vector<int64_t> efi(paddedNum * 4, 0);
-    if (_width < 64 && bc != -2) {
+    if (_width < 64) {
         for (int i = 0; i < num; i++) {
             auto bmt = BitwiseBmt::extract(bmts, i, _width);
             efi[i] = (*_xis)[i] ^ bmt._a;
@@ -155,7 +147,7 @@ void BitwiseAndOperator::executeForMutex() {
         const int fIdx = i < num ? paddedNum * 2 + i : paddedNum * 3 + i - num;
         const int64_t e = efs[eIdx];
         const int64_t f = efs[fIdx];
-        if (_width < 64 && bc != -2) {
+        if (_width < 64) {
             auto bmt = BitwiseBmt::extract(bmts, i, _width);
             _zis[i] = Math::ring((extendedRank & e & f) ^ (f & bmt._a) ^ (e & bmt._b) ^ bmt._c, _width);
         } else {

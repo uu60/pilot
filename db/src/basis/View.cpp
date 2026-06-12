@@ -98,9 +98,6 @@ void View::sort(const std::vector<std::string> &orderFields, const std::vector<b
     if (orderFields.empty() || orderFields.size() != ascendingOrders.size() || rowNum() == 0) {
         return;
     }
-    if (orderFields.size() != 1) {
-        throw std::runtime_error("Pilot View::sort currently supports a single order field.");
-    }
 
     const size_t originalRows = rowNum();
     const bool powerOfTwo = (originalRows & (originalRows - 1)) == 0;
@@ -121,22 +118,20 @@ void View::sort(const std::vector<std::string> &orderFields, const std::vector<b
 }
 
 int View::compareBatchSize(const std::vector<std::string> &orderFields) const {
-    int maxKeyWidth = 1;
+    int totalKeyWidth = 0;
     for (const auto &field: orderFields) {
         const int idx = colIndex(field);
         if (idx < 0) {
             throw std::runtime_error("View::sort order field not found: " + field);
         }
-        maxKeyWidth = std::max(maxKeyWidth, _fieldWidths[idx]);
+        totalKeyWidth += _fieldWidths[idx];
+    }
+    if (totalKeyWidth > 62) {
+        throw std::runtime_error("Pilot View::sort supports multi-column keys up to 62 packed bits.");
     }
 
-    int maxRowWidth = 1;
-    for (int width: _fieldWidths) {
-        maxRowWidth = std::max(maxRowWidth, width);
-    }
-
-    const int lessCap = std::max(1, (Conf::IN_PATH_BMT_BUNDLE_SIZE * 64) / maxKeyWidth);
-    const int mutexCap = std::max(1, (Conf::IN_PATH_BMT_BUNDLE_SIZE * 64) / (2 * maxRowWidth));
+    const int lessCap = std::max(1, Conf::IN_PATH_BMT_BUNDLE_SIZE);
+    const int mutexCap = std::max(1, Conf::IN_PATH_BMT_BUNDLE_SIZE / 2);
     return std::max(1, std::min(lessCap, mutexCap));
 }
 
@@ -199,49 +194,70 @@ View::LaneResult View::runLaneCompareSwap(const std::vector<PairJob> &jobs,
 
         for (size_t offset = 0; offset < jobs.size(); offset += batchSize) {
             const size_t end = std::min(jobs.size(), offset + static_cast<size_t>(batchSize));
-            const int count = static_cast<int>(end - offset);
-            std::vector<int64_t> swapCond(count, 0);
-            bool condInitialized = false;
-
-            for (size_t keyIdx = 0; keyIdx < orderFields.size(); ++keyIdx) {
-                const int colIdx = colIndex(orderFields[keyIdx]);
-                std::vector<int64_t> left(count), right(count);
-                for (int i = 0; i < count; ++i) {
-                    const auto &job = jobs[offset + i];
-                    left[i] = _dataCols[colIdx][job.leftIndex];
-                    right[i] = _dataCols[colIdx][job.rightIndex];
+            auto processDirection = [&](bool bitonicAscending) {
+                std::vector<int> positions;
+                for (size_t pos = offset; pos < end; ++pos) {
+                    if (jobs[pos].ascending == bitonicAscending) {
+                        positions.push_back(static_cast<int>(pos));
+                    }
+                }
+                if (positions.empty()) {
+                    return;
                 }
 
-                std::vector<int64_t> keySwap(count);
-                if (ascendingOrders[keyIdx]) {
-                    keySwap = BitwiseLessOperator(&right, &left, _fieldWidths[colIdx],
-                                                  SecureOperator::NO_CLIENT_COMPUTE).execute()->_zis;
+                const int count = static_cast<int>(positions.size());
+                int packedWidth = 0;
+                for (const auto &field: orderFields) {
+                    packedWidth += _fieldWidths[colIndex(field)];
+                }
+
+                std::vector<int64_t> leftKey(count, 0);
+                std::vector<int64_t> rightKey(count, 0);
+                int shift = packedWidth;
+                for (size_t keyIdx = 0; keyIdx < orderFields.size(); ++keyIdx) {
+                    const int colIdx = colIndex(orderFields[keyIdx]);
+                    const int width = _fieldWidths[colIdx];
+                    shift -= width;
+                    const int64_t mask = (1LL << width) - 1;
+                    const int64_t descendingFlip = ascendingOrders[keyIdx]
+                                                       ? 0
+                                                       : (Comm::rank() == Comm::SERVER1_RANK ? mask : 0);
+                    for (int i = 0; i < count; ++i) {
+                        const auto &job = jobs[positions[i]];
+                        const int64_t leftPart = (_dataCols[colIdx][job.leftIndex] ^ descendingFlip) & mask;
+                        const int64_t rightPart = (_dataCols[colIdx][job.rightIndex] ^ descendingFlip) & mask;
+                        leftKey[i] |= leftPart << shift;
+                        rightKey[i] |= rightPart << shift;
+                    }
+                }
+
+                std::vector<int64_t> swapCond;
+                if (bitonicAscending) {
+                    swapCond = BitwiseLessOperator(&rightKey, &leftKey, packedWidth,
+                                                   SecureOperator::NO_CLIENT_COMPUTE).execute()->_zis;
                 } else {
-                    keySwap = BitwiseLessOperator(&left, &right, _fieldWidths[colIdx],
-                                                  SecureOperator::NO_CLIENT_COMPUTE).execute()->_zis;
+                    swapCond = BitwiseLessOperator(&leftKey, &rightKey, packedWidth,
+                                                   SecureOperator::NO_CLIENT_COMPUTE).execute()->_zis;
                 }
 
-                if (!condInitialized) {
-                    swapCond = std::move(keySwap);
-                    condInitialized = true;
-                }
-                // Multi-key tie breaking is intentionally deferred until Equal is chunked the same way.
-            }
+                for (size_t col = 0; col < colNum(); ++col) {
+                    std::vector<int64_t> left(count), right(count);
+                    for (int i = 0; i < count; ++i) {
+                        const auto &job = jobs[positions[i]];
+                        left[i] = _dataCols[col][job.leftIndex];
+                        right[i] = _dataCols[col][job.rightIndex];
+                    }
 
-            for (size_t col = 0; col < colNum(); ++col) {
-                std::vector<int64_t> left(count), right(count);
-                for (int i = 0; i < count; ++i) {
-                    const auto &job = jobs[offset + i];
-                    left[i] = _dataCols[col][job.leftIndex];
-                    right[i] = _dataCols[col][job.rightIndex];
+                    auto swapped = BitwiseMutexOperator(&right, &left, &swapCond, _fieldWidths[col]).execute()->_zis;
+                    for (int i = 0; i < count; ++i) {
+                        result.leftCols[col][positions[i]] = swapped[i];
+                        result.rightCols[col][positions[i]] = swapped[count + i];
+                    }
                 }
+            };
 
-                auto swapped = BitwiseMutexOperator(&right, &left, &swapCond, _fieldWidths[col]).execute()->_zis;
-                for (int i = 0; i < count; ++i) {
-                    result.leftCols[col][offset + i] = swapped[i];
-                    result.rightCols[col][offset + i] = swapped[count + i];
-                }
-            }
+            processDirection(true);
+            processDirection(false);
         }
 
         return result;

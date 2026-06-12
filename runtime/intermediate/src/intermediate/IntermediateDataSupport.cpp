@@ -88,7 +88,7 @@ std::vector<BitwiseBmt> IntermediateDataSupport::pollBitwiseBmts(int count, int 
     for (int i = 0; i < count; ++i) {
         const auto raw = queue.front();
         queue.pop_front();
-        result.push_back(BitwiseBmt{Math::ring(raw.a, width), Math::ring(raw.b, width), Math::ring(raw.c, width)});
+        result.push_back(BitwiseBmt{raw.a, raw.b, raw.c});
     }
     return result;
 }

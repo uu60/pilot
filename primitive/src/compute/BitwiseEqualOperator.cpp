@@ -8,15 +8,23 @@
 BitwiseEqualOperator *BitwiseEqualOperator::execute() {
     if (Comm::isClient()) return this;
 
-    auto diff = BitwiseXorOperator(_xis, _yis, _width, NO_CLIENT_COMPUTE).execute()->_zis;
+    auto diff = BitwiseXorOperator(_xis, _yis, _width, NO_CLIENT_COMPUTE)
+            .execute()
+            ->_zis;
+
     std::vector<int64_t> values;
     values.reserve(diff.size() * _width);
     for (auto v: diff) {
         auto equalBits = Math::ring(Comm::rank() == Comm::SERVER0_RANK ? ~v : v, _width);
-        for (int bit = 0; bit < _width; ++bit) values.push_back((equalBits >> bit) & 1);
+        for (int bit = 0; bit < _width; ++bit) {
+            values.push_back((equalBits >> bit) & 1);
+        }
     }
 
     int activeWidth = _width;
+    size_t bmtOffset = 0;
+    const bool gotBmt = _bmts != nullptr;
+
     while (activeWidth > 1) {
         const int pairCountPerRecord = activeWidth / 2;
         const int nextWidth = (activeWidth + 1) / 2;
@@ -26,6 +34,7 @@ BitwiseEqualOperator *BitwiseEqualOperator::execute() {
         std::vector<int64_t> rhs;
         lhs.reserve(recordCount * pairCountPerRecord);
         rhs.reserve(recordCount * pairCountPerRecord);
+
         std::vector<int64_t> carry(recordCount, 0);
         for (int row = 0; row < recordCount; ++row) {
             auto base = static_cast<size_t>(row * activeWidth);
@@ -33,24 +42,42 @@ BitwiseEqualOperator *BitwiseEqualOperator::execute() {
                 lhs.push_back(values[base + bit]);
                 rhs.push_back(values[base + bit + 1]);
             }
-            if (activeWidth % 2 == 1) carry[row] = values[base + activeWidth - 1];
+            if (activeWidth % 2 == 1) {
+                carry[row] = values[base + activeWidth - 1];
+            }
         }
 
         std::vector<int64_t> andResult;
         if (!lhs.empty()) {
-            andResult = BitwiseAndOperator(&lhs, &rhs, 1, NO_CLIENT_COMPUTE).execute()->_zis;
+            std::vector<BitwiseBmt> roundBmts;
+            if (gotBmt) {
+                auto roundBmtCount = BitwiseAndOperator::bmtCount(static_cast<int>(lhs.size()), 1);
+                roundBmts.assign(_bmts->begin() + static_cast<long>(bmtOffset),
+                                 _bmts->begin() + static_cast<long>(bmtOffset + roundBmtCount));
+                bmtOffset += roundBmtCount;
+            }
+            andResult = BitwiseAndOperator(&lhs, &rhs, 1, NO_CLIENT_COMPUTE)
+                    .setBmts(gotBmt ? &roundBmts : nullptr)
+                    ->execute()
+                    ->_zis;
         }
 
         std::vector<int64_t> next;
         next.reserve(recordCount * nextWidth);
         size_t andIndex = 0;
         for (int row = 0; row < recordCount; ++row) {
-            for (int j = 0; j < pairCountPerRecord; ++j) next.push_back(andResult[andIndex++] & 1);
-            if (activeWidth % 2 == 1) next.push_back(carry[row] & 1);
+            for (int j = 0; j < pairCountPerRecord; ++j) {
+                next.push_back(andResult[andIndex++] & 1);
+            }
+            if (activeWidth % 2 == 1) {
+                next.push_back(carry[row] & 1);
+            }
         }
+
         values = std::move(next);
         activeWidth = nextWidth;
     }
+
     _zis = std::move(values);
     return this;
 }
