@@ -105,6 +105,30 @@ public:
     static void wait(AbstractRequest *request);
 
 protected:
+    virtual void serverSendImpl_(const int64_t &source, int width, int tag);
+
+    virtual void serverSendImpl_(const std::vector<int64_t> &source, int width, int tag);
+
+    virtual void serverSendImpl_(const std::string &source, int tag);
+
+    virtual void serverReceiveImpl_(int64_t &source, int width, int tag);
+
+    virtual void serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag);
+
+    virtual void serverReceiveImpl_(std::string &target, int tag);
+
+    virtual AbstractRequest *serverSendAsyncImpl_(const int64_t &source, int width, int tag);
+
+    virtual AbstractRequest *serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag);
+
+    virtual AbstractRequest *serverSendAsyncImpl_(const std::string &source, int tag);
+
+    virtual AbstractRequest *serverReceiveAsyncImpl_(int64_t &target, int width, int tag);
+
+    virtual AbstractRequest *serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag);
+
+    virtual AbstractRequest *serverReceiveAsyncImpl_(std::string &target, int length, int tag);
+
     virtual int rank_() = 0;
 
     virtual void init_(int argc, char **argv) = 0;

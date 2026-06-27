@@ -3,6 +3,7 @@
 #include "parallel/LaneThreadPool.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 
 namespace {
@@ -16,9 +17,45 @@ int getInt(int argc, char **argv, const std::string &name, int fallback) {
     }
     return fallback;
 }
+
+std::string getString(int argc, char **argv, const std::string &name, const std::string &fallback) {
+    const std::string prefix = "--" + name + "=";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg.rfind(prefix, 0) == 0) {
+            return arg.substr(prefix.size());
+        }
+    }
+    return fallback;
+}
+
+Conf::ServerTransportT getServerTransport(int argc, char **argv) {
+    const auto value = getString(argc, argv, "server_transport", "mpi_switch");
+    if (value == "mpi_switch" || value == "mpi") {
+        return Conf::SERVER_TRANSPORT_MPI;
+    }
+    if (value == "tcp_switch" || value == "tcp") {
+        return Conf::SERVER_TRANSPORT_TCP;
+    }
+    throw std::runtime_error("Unsupported --server_transport. Expected mpi_switch/mpi or tcp_switch/tcp.");
+}
+
+Conf::SimulationLevelT getSimulationLevel(int argc, char **argv) {
+    const auto value = getString(argc, argv, "simulation_level", "software");
+    if (value == "software") {
+        return Conf::SIMULATION_SOFTWARE;
+    }
+    if (value == "simulator") {
+        return Conf::SIMULATION_SIMULATOR;
+    }
+    throw std::runtime_error("Unsupported --simulation_level. Expected software or simulator.");
+}
 }
 
 void Conf::init(int argc, char **argv) {
+    SERVER_TRANSPORT = getServerTransport(argc, argv);
+    SIMULATION_LEVEL = getSimulationLevel(argc, argv);
+    TCP_SWITCH_PORT = getInt(argc, argv, "tcp_switch_port", TCP_SWITCH_PORT);
     IN_PATH_MAX_PARALLELISM = getInt(argc, argv, "in_path_max_parallelism", IN_PATH_MAX_PARALLELISM);
     IN_PATH_BMT_BUNDLE_SIZE = getInt(argc, argv, "in_path_bmt_bundle_size", IN_PATH_BMT_BUNDLE_SIZE);
     IN_PATH_SWITCH_RANK = getInt(argc, argv, "in_path_switch_rank", IN_PATH_SWITCH_RANK);

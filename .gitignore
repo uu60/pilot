@@ -113,6 +113,7 @@ fabric.properties
 # CMake ================================
 bin/
 build/
+build-*/
 build_no_tbb/
 CMakeLists.txt.user
 CMakeCache.txt

@@ -127,6 +127,20 @@ std::vector<int64_t> InPathSwitchSimulator::makeEnvelope(int srcRank, int dstRan
     return envelope;
 }
 
+std::vector<int64_t> InPathSwitchSimulator::forwardRequest(int srcRank, int tag,
+                                                           const std::vector<int64_t> &request) {
+    if (!Comm::isServerRank(srcRank)) {
+        throw std::runtime_error("Switch simulator only forwards party 0/1 traffic.");
+    }
+    const int dstRank = srcRank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
+    int laneId = 0;
+    int bmtRequestCount = 0;
+    std::vector<int64_t> payload;
+    unpackSwitchRequest(request, laneId, bmtRequestCount, payload);
+    auto trailer = generateShareBundle(laneId, tag, dstRank, bmtRequestCount);
+    return makeEnvelope(srcRank, dstRank, tag, laneId, payload, trailer);
+}
+
 std::vector<int64_t> InPathSwitchSimulator::unpackPayload(const std::vector<int64_t> &envelope) {
     if (envelope.size() < 7 || envelope[0] != ENVELOPE_MAGIC) {
         throw std::runtime_error("Invalid in-path switch envelope.");
@@ -186,16 +200,8 @@ void InPathSwitchSimulator::run() {
             continue;
         }
 
-        if (!Comm::isServerRank(status.MPI_SOURCE)) {
-            throw std::runtime_error("Switch simulator only forwards party 0/1 traffic.");
-        }
         const int dstRank = status.MPI_SOURCE == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
-        int laneId = 0;
-        int bmtRequestCount = 0;
-        std::vector<int64_t> payload;
-        unpackSwitchRequest(request, laneId, bmtRequestCount, payload);
-        auto trailer = generateShareBundle(laneId, status.MPI_TAG, dstRank, bmtRequestCount);
-        auto envelope = makeEnvelope(status.MPI_SOURCE, dstRank, status.MPI_TAG, laneId, payload, trailer);
+        auto envelope = forwardRequest(status.MPI_SOURCE, status.MPI_TAG, request);
         MPI_Send(envelope.data(), static_cast<int>(envelope.size()), MPI_INT64_T,
                  dstRank, status.MPI_TAG, MPI_COMM_WORLD);
     }

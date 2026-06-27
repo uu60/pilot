@@ -7,6 +7,7 @@
 
 #include "comm/InPathSwitchSimulator.h"
 #include "comm/MpiComm.h"
+#include "comm/TcpComm.h"
 #include "comm/item/FutureRequestWrapper.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
@@ -45,7 +46,11 @@ int Comm::rank() {
 
 void Comm::init(int argc, char **argv) {
     if (Conf::COMM_TYPE == Conf::MPI) {
-        impl = new MpiComm();
+        if (Conf::SERVER_TRANSPORT == Conf::SERVER_TRANSPORT_TCP) {
+            impl = new TcpComm();
+        } else {
+            impl = new MpiComm();
+        }
     } else {
         throw std::runtime_error("Pilot only supports MPI communication.");
     }
@@ -80,6 +85,46 @@ int Comm::serverPeerRank() {
 }
 
 void Comm::serverSend(const int64_t &source, int width, int tag) {
+    impl->serverSendImpl_(source, width, tag);
+}
+
+void Comm::serverSend(const std::vector<int64_t> &source, int width, int tag) {
+    impl->serverSendImpl_(source, width, tag);
+}
+
+void Comm::serverSend(const std::string &source, int tag) {
+    impl->serverSendImpl_(source, tag);
+}
+
+void Comm::serverSend(const int64_t &source, int width) {
+    serverSend(source, width, inPathPhysicalTag());
+}
+
+void Comm::serverSend(const std::vector<int64_t> &source, int width) {
+    serverSend(source, width, inPathPhysicalTag());
+}
+
+void Comm::serverReceive(int64_t &source, int width, int tag) {
+    impl->serverReceiveImpl_(source, width, tag);
+}
+
+void Comm::serverReceive(std::vector<int64_t> &source, int width, int tag) {
+    impl->serverReceiveImpl_(source, width, tag);
+}
+
+void Comm::serverReceive(std::string &target, int tag) {
+    impl->serverReceiveImpl_(target, tag);
+}
+
+void Comm::serverReceive(int64_t &source, int width) {
+    serverReceive(source, width, inPathPhysicalTag());
+}
+
+void Comm::serverReceive(std::vector<int64_t> &source, int width) {
+    serverReceive(source, width, inPathPhysicalTag());
+}
+
+void Comm::serverSendImpl_(const int64_t &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> payload{source};
@@ -92,7 +137,7 @@ void Comm::serverSend(const int64_t &source, int width, int tag) {
     } catch (...) {}
 }
 
-void Comm::serverSend(const std::vector<int64_t> &source, int width, int tag) {
+void Comm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
@@ -104,21 +149,13 @@ void Comm::serverSend(const std::vector<int64_t> &source, int width, int tag) {
     } catch (...) {}
 }
 
-void Comm::serverSend(const std::string &source, int tag) {
+void Comm::serverSendImpl_(const std::string &source, int tag) {
     try {
         MEASURE_EXECUTION_TIME(send(source, serverPeerRank(), tag));
     } catch (...) {}
 }
 
-void Comm::serverSend(const int64_t &source, int width) {
-    serverSend(source, width, inPathPhysicalTag());
-}
-
-void Comm::serverSend(const std::vector<int64_t> &source, int width) {
-    serverSend(source, width, inPathPhysicalTag());
-}
-
-void Comm::serverReceive(int64_t &source, int width, int tag) {
+void Comm::serverReceiveImpl_(int64_t &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> envelope;
@@ -135,7 +172,7 @@ void Comm::serverReceive(int64_t &source, int width, int tag) {
     } catch (...) {}
 }
 
-void Comm::serverReceive(std::vector<int64_t> &source, int width, int tag) {
+void Comm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> envelope;
@@ -148,18 +185,10 @@ void Comm::serverReceive(std::vector<int64_t> &source, int width, int tag) {
     } catch (...) {}
 }
 
-void Comm::serverReceive(std::string &target, int tag) {
+void Comm::serverReceiveImpl_(std::string &target, int tag) {
     try {
         MEASURE_EXECUTION_TIME(receive(target, serverPeerRank(), tag));
     } catch (...) {}
-}
-
-void Comm::serverReceive(int64_t &source, int width) {
-    serverReceive(source, width, inPathPhysicalTag());
-}
-
-void Comm::serverReceive(std::vector<int64_t> &source, int width) {
-    serverReceive(source, width, inPathPhysicalTag());
 }
 
 void Comm::send(const int64_t &source, int width, int receiverRank, int tag) {
@@ -247,6 +276,46 @@ AbstractRequest *Comm::sendAsync(const std::string &source, int receiverRank, in
 }
 
 AbstractRequest *Comm::serverSendAsync(const int64_t &source, int width, int tag) {
+    return impl->serverSendAsyncImpl_(source, width, tag);
+}
+
+AbstractRequest *Comm::serverSendAsync(const std::vector<int64_t> &source, int width, int tag) {
+    return impl->serverSendAsyncImpl_(source, width, tag);
+}
+
+AbstractRequest *Comm::serverSendAsync(const std::string &source, int tag) {
+    return impl->serverSendAsyncImpl_(source, tag);
+}
+
+AbstractRequest *Comm::serverSendAsync(const int64_t &source, int width) {
+    return serverSendAsync(source, width, inPathPhysicalTag());
+}
+
+AbstractRequest *Comm::serverSendAsync(const std::vector<int64_t> &source, int width) {
+    return serverSendAsync(source, width, inPathPhysicalTag());
+}
+
+AbstractRequest *Comm::serverReceiveAsync(int64_t &target, int width, int tag) {
+    return impl->serverReceiveAsyncImpl_(target, width, tag);
+}
+
+AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int count, int width, int tag) {
+    return impl->serverReceiveAsyncImpl_(target, count, width, tag);
+}
+
+AbstractRequest *Comm::serverReceiveAsync(std::string &target, int length, int tag) {
+    return impl->serverReceiveAsyncImpl_(target, length, tag);
+}
+
+AbstractRequest *Comm::serverReceiveAsync(int64_t &target, int width) {
+    return serverReceiveAsync(target, width, inPathPhysicalTag());
+}
+
+AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int count, int width) {
+    return serverReceiveAsync(target, count, width, inPathPhysicalTag());
+}
+
+AbstractRequest *Comm::serverSendAsyncImpl_(const int64_t &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> payload{source};
@@ -260,7 +329,7 @@ AbstractRequest *Comm::serverSendAsync(const int64_t &source, int width, int tag
     }
 }
 
-AbstractRequest *Comm::serverSendAsync(const std::vector<int64_t> &source, int width, int tag) {
+AbstractRequest *Comm::serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
@@ -273,7 +342,7 @@ AbstractRequest *Comm::serverSendAsync(const std::vector<int64_t> &source, int w
     }
 }
 
-AbstractRequest *Comm::serverSendAsync(const std::string &source, int tag) {
+AbstractRequest *Comm::serverSendAsyncImpl_(const std::string &source, int tag) {
     try {
         return sendAsync(source, serverPeerRank(), tag);
     } catch (...) {
@@ -281,15 +350,7 @@ AbstractRequest *Comm::serverSendAsync(const std::string &source, int tag) {
     }
 }
 
-AbstractRequest *Comm::serverSendAsync(const int64_t &source, int width) {
-    return serverSendAsync(source, width, inPathPhysicalTag());
-}
-
-AbstractRequest *Comm::serverSendAsync(const std::vector<int64_t> &source, int width) {
-    return serverSendAsync(source, width, inPathPhysicalTag());
-}
-
-AbstractRequest *Comm::serverReceiveAsync(int64_t &target, int width, int tag) {
+AbstractRequest *Comm::serverReceiveAsyncImpl_(int64_t &target, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         return new FutureRequestWrapper(std::async(std::launch::async, [&target, physicalTag]() {
@@ -309,7 +370,7 @@ AbstractRequest *Comm::serverReceiveAsync(int64_t &target, int width, int tag) {
     }
 }
 
-AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int count, int width, int tag) {
+AbstractRequest *Comm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag) {
     if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         return new FutureRequestWrapper(std::async(std::launch::async, [&target, count, physicalTag]() {
@@ -329,20 +390,12 @@ AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int coun
     }
 }
 
-AbstractRequest *Comm::serverReceiveAsync(std::string &target, int length, int tag) {
+AbstractRequest *Comm::serverReceiveAsyncImpl_(std::string &target, int length, int tag) {
     try {
         return receiveAsync(target, length, serverPeerRank(), tag);
     } catch (...) {
         return nullptr;
     }
-}
-
-AbstractRequest *Comm::serverReceiveAsync(int64_t &target, int width) {
-    return serverReceiveAsync(target, width, inPathPhysicalTag());
-}
-
-AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int count, int width) {
-    return serverReceiveAsync(target, count, width, inPathPhysicalTag());
 }
 
 void Comm::wait(AbstractRequest *request) {

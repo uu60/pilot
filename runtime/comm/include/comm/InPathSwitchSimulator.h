@@ -36,6 +36,9 @@ public:
                                              const std::vector<int64_t> &payload,
                                              const std::vector<RawBitwiseBmt> &trailer);
 
+    static std::vector<int64_t> forwardRequest(int srcRank, int tag,
+                                               const std::vector<int64_t> &request);
+
     static std::vector<int64_t> unpackPayload(const std::vector<int64_t> &envelope);
 };
 
