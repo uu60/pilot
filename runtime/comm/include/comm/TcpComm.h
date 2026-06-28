@@ -2,6 +2,7 @@
 #define PILOT_TCP_COMM_H
 
 #include "comm/MpiComm.h"
+#include "comm/PilotFrame.h"
 
 #include <condition_variable>
 #include <deque>
@@ -47,9 +48,9 @@ private:
 
     static void finalizeTcp();
 
-    static void sendFrame(int fd, int sourceRank, int physicalTag, const std::vector<int64_t> &words);
+    static void sendFrame(int fd, const PilotFrame &frame);
 
-    static bool receiveFrame(int fd, int &sourceRank, int &physicalTag, std::vector<int64_t> &words);
+    static bool receiveFrame(int fd, PilotFrame &frame);
 
     inline static std::mutex _mutex;
     inline static std::condition_variable _cv;

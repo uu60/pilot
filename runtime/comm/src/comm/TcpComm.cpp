@@ -156,38 +156,35 @@ void TcpComm::runSwitch() {
             throwSystemError("switch socket accept failed");
         }
 
-        int sourceRank = -1;
-        int physicalTag = 0;
-        std::vector<int64_t> words;
-        if (!receiveFrame(fd, sourceRank, physicalTag, words) || physicalTag != kHelloTag) {
+        PilotFrame hello;
+        if (!receiveFrame(fd, hello) || hello.physicalTag != kHelloTag) {
             close(fd);
             continue;
         }
-        if (!Comm::isServerRank(sourceRank)) {
+        if (!Comm::isServerRank(hello.sourceRank)) {
             close(fd);
             continue;
         }
-        serverFds[static_cast<size_t>(sourceRank)] = fd;
+        serverFds[static_cast<size_t>(hello.sourceRank)] = fd;
     }
 
     std::atomic_int shutdowns{0};
     auto worker = [&](int srcRank) {
         const int dstRank = srcRank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
         while (shutdowns.load() < 2) {
-            int sourceRank = -1;
-            int physicalTag = 0;
-            std::vector<int64_t> request;
-            if (!receiveFrame(serverFds[static_cast<size_t>(srcRank)], sourceRank, physicalTag, request)) {
+            PilotFrame request;
+            if (!receiveFrame(serverFds[static_cast<size_t>(srcRank)], request)) {
                 break;
             }
-            if (physicalTag == InPathSwitchSimulator::CONTROL_TAG &&
-                request.size() == 1 &&
-                request[0] == InPathSwitchSimulator::SHUTDOWN_MAGIC) {
+            if (request.physicalTag == InPathSwitchSimulator::CONTROL_TAG &&
+                request.words.size() == 1 &&
+                request.words[0] == InPathSwitchSimulator::SHUTDOWN_MAGIC) {
                 ++shutdowns;
                 break;
             }
-            auto envelope = InPathSwitchSimulator::forwardRequest(srcRank, physicalTag, request);
-            sendFrame(serverFds[static_cast<size_t>(dstRank)], Conf::IN_PATH_SWITCH_RANK, physicalTag, envelope);
+            auto envelope = InPathSwitchSimulator::forwardRequest(srcRank, request.physicalTag, request.words);
+            sendFrame(serverFds[static_cast<size_t>(dstRank)],
+                      PilotFrame{Conf::IN_PATH_SWITCH_RANK, dstRank, request.physicalTag, std::move(envelope)});
         }
     };
 
@@ -209,7 +206,8 @@ void TcpComm::sendShutdown() {
     ensureClientConnected();
     std::vector<int64_t> stop{InPathSwitchSimulator::SHUTDOWN_MAGIC};
     std::lock_guard<std::mutex> lock(_mutex);
-    sendFrame(_socketFd, Comm::rank(), InPathSwitchSimulator::CONTROL_TAG, stop);
+    sendFrame(_socketFd,
+              PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, InPathSwitchSimulator::CONTROL_TAG, stop});
 }
 
 void TcpComm::serverSendImpl_(const int64_t &source, int width, int tag) {
@@ -326,7 +324,7 @@ void TcpComm::finalize_() {
 void TcpComm::send(int physicalTag, const std::vector<int64_t> &request) {
     ensureClientConnected();
     std::lock_guard<std::mutex> lock(_mutex);
-    sendFrame(_socketFd, Comm::rank(), physicalTag, request);
+    sendFrame(_socketFd, PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, physicalTag, request});
 }
 
 std::vector<int64_t> TcpComm::receive(int physicalTag) {
@@ -352,22 +350,20 @@ void TcpComm::ensureClientConnected() {
     }
     _socketFd = createClientSocket();
     _connected = true;
-    sendFrame(_socketFd, Comm::rank(), static_cast<int>(kHelloTag), {});
+    sendFrame(_socketFd, PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, static_cast<int>(kHelloTag), {}});
     _receiveThread = std::thread(receiveLoop);
 }
 
 void TcpComm::receiveLoop() {
     try {
         while (true) {
-            int sourceRank = -1;
-            int physicalTag = 0;
-            std::vector<int64_t> words;
-            if (!receiveFrame(_socketFd, sourceRank, physicalTag, words)) {
+            PilotFrame frame;
+            if (!receiveFrame(_socketFd, frame)) {
                 break;
             }
             {
                 std::lock_guard<std::mutex> lock(_mutex);
-                _pending[physicalTag].push_back(std::move(words));
+                _pending[frame.physicalTag].push_back(std::move(frame.words));
             }
             _cv.notify_all();
         }
@@ -391,30 +387,32 @@ void TcpComm::finalizeTcp() {
     }
 }
 
-void TcpComm::sendFrame(int fd, int sourceRank, int physicalTag, const std::vector<int64_t> &words) {
-    const int64_t header[3]{
-        static_cast<int64_t>(sourceRank),
-        static_cast<int64_t>(physicalTag),
-        static_cast<int64_t>(words.size())
+void TcpComm::sendFrame(int fd, const PilotFrame &frame) {
+    const int64_t header[4]{
+        static_cast<int64_t>(frame.sourceRank),
+        static_cast<int64_t>(frame.destinationRank),
+        static_cast<int64_t>(frame.physicalTag),
+        static_cast<int64_t>(frame.words.size())
     };
     writeAll(fd, header, sizeof(header));
-    if (!words.empty()) {
-        writeAll(fd, words.data(), words.size() * sizeof(int64_t));
+    if (!frame.words.empty()) {
+        writeAll(fd, frame.words.data(), frame.words.size() * sizeof(int64_t));
     }
 }
 
-bool TcpComm::receiveFrame(int fd, int &sourceRank, int &physicalTag, std::vector<int64_t> &words) {
-    int64_t header[3]{};
+bool TcpComm::receiveFrame(int fd, PilotFrame &frame) {
+    int64_t header[4]{};
     if (!readAll(fd, header, sizeof(header))) {
         return false;
     }
-    if (header[2] < 0) {
+    if (header[3] < 0) {
         throw std::runtime_error("Invalid TCP switch frame size.");
     }
-    sourceRank = static_cast<int>(header[0]);
-    physicalTag = static_cast<int>(header[1]);
-    words.resize(static_cast<size_t>(header[2]));
-    if (!words.empty() && !readAll(fd, words.data(), words.size() * sizeof(int64_t))) {
+    frame.sourceRank = static_cast<int>(header[0]);
+    frame.destinationRank = static_cast<int>(header[1]);
+    frame.physicalTag = static_cast<int>(header[2]);
+    frame.words.resize(static_cast<size_t>(header[3]));
+    if (!frame.words.empty() && !readAll(fd, frame.words.data(), frame.words.size() * sizeof(int64_t))) {
         return false;
     }
     return true;
