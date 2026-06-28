@@ -3,7 +3,7 @@
 
 class Conf {
 public:
-    enum CommT { MPI };
+    enum CommT { MPI, ROUTED };
     enum BmtT { BMT_BACKGROUND, BMT_IN_PATH };
     enum ServerTransportT { SERVER_TRANSPORT_MPI, SERVER_TRANSPORT_TCP };
     enum SimulationLevelT { SIMULATION_SOFTWARE, SIMULATION_SIMULATOR };
@@ -12,6 +12,8 @@ public:
 
     inline static BmtT BMT_METHOD = BMT_IN_PATH;
     inline static CommT COMM_TYPE = MPI;
+    inline static int ROUTED_RANK = 0;
+    inline static int ROUTED_BASE_PORT = 20000;
     inline static bool ENABLE_CLASS_WISE_TIMING = false;
     inline static bool ENABLE_SIMD = false;
     inline static bool DISABLE_MULTI_THREAD = false;

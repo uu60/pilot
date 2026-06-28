@@ -33,7 +33,7 @@ void PilotSystem::init(int argc, char **argv) {
 
 void PilotSystem::finalize() {
     if (Comm::isServer()) {
-        if (RoutedComm::enabled()) {
+        if (Conf::COMM_TYPE == Conf::ROUTED) {
             RoutedComm::sendShutdown();
         } else {
             InPathSwitchSimulator::sendShutdown();

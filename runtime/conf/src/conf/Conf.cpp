@@ -29,6 +29,34 @@ std::string getString(int argc, char **argv, const std::string &name, const std:
     return fallback;
 }
 
+Conf::CommT getCommType(int argc, char **argv) {
+    const auto value = getString(argc, argv, "comm", "mpi");
+    if (value == "mpi") {
+        return Conf::MPI;
+    }
+    if (value == "routed" || value == "standalone") {
+        return Conf::ROUTED;
+    }
+    throw std::runtime_error("Unsupported --comm. Expected mpi or routed.");
+}
+
+int getRoutedRank(int argc, char **argv) {
+    const auto role = getString(argc, argv, "role", "");
+    if (role == "server0") {
+        return 0;
+    }
+    if (role == "server1") {
+        return 1;
+    }
+    if (role == "client") {
+        return 2;
+    }
+    if (role == "switch") {
+        return 3;
+    }
+    return getInt(argc, argv, "rank", Conf::ROUTED_RANK);
+}
+
 Conf::ServerTransportT getServerTransport(int argc, char **argv) {
     const auto value = getString(argc, argv, "server_transport", "mpi_switch");
     if (value == "mpi_switch" || value == "mpi") {
@@ -53,6 +81,10 @@ Conf::SimulationLevelT getSimulationLevel(int argc, char **argv) {
 }
 
 void Conf::init(int argc, char **argv) {
+    COMM_TYPE = getCommType(argc, argv);
+    ROUTED_RANK = getRoutedRank(argc, argv);
+    ROUTED_BASE_PORT = getInt(argc, argv, "routed_base_port",
+                              getInt(argc, argv, "standalone_base_port", ROUTED_BASE_PORT));
     SERVER_TRANSPORT = getServerTransport(argc, argv);
     SIMULATION_LEVEL = getSimulationLevel(argc, argv);
     TCP_SWITCH_PORT = getInt(argc, argv, "tcp_switch_port", TCP_SWITCH_PORT);

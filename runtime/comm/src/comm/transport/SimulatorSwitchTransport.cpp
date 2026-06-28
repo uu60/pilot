@@ -4,7 +4,8 @@
 
 namespace {
 [[noreturn]] void throwNotImplemented() {
-    throw std::runtime_error("Simulator switch transport is not implemented yet.");
+    throw std::runtime_error(
+        "Simulator switch transport is intentionally not implemented in the MPI software-switch path.");
 }
 }
 

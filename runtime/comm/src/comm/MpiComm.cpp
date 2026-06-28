@@ -32,7 +32,7 @@ void MpiComm::init_(int argc, char **argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &_mpiSize);
     const int expectedSize = Conf::ENABLE_IN_PATH_BMT_SWITCH ? Conf::IN_PATH_SWITCH_RANK + 1 : 3;
     if (_mpiSize != expectedSize) {
-        throw std::runtime_error("Pilot in-path mode expects 2 servers, 1 client, and 1 switch rank.");
+        throw std::runtime_error("Pilot MPI software-switch mode expects 2 servers, 1 client, and 1 switch rank.");
     }
 }
 
