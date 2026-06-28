@@ -5,10 +5,8 @@
 
 #include <vector>
 
-#include "comm/InPathSwitchSimulator.h"
 #include "comm/MpiComm.h"
-#include "comm/TcpComm.h"
-#include "comm/item/FutureRequestWrapper.h"
+#include "comm/RoutedComm.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
 #include "parallel/LaneThreadPool.h"
@@ -46,8 +44,8 @@ int Comm::rank() {
 
 void Comm::init(int argc, char **argv) {
     if (Conf::COMM_TYPE == Conf::MPI) {
-        if (Conf::SERVER_TRANSPORT == Conf::SERVER_TRANSPORT_TCP) {
-            impl = new TcpComm();
+        if (RoutedComm::enabled()) {
+            impl = new RoutedComm();
         } else {
             impl = new MpiComm();
         }
@@ -125,25 +123,12 @@ void Comm::serverReceive(std::vector<int64_t> &source, int width) {
 }
 
 void Comm::serverSendImpl_(const int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        std::vector<int64_t> payload{source};
-        auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
-        MEASURE_EXECUTION_TIME(send(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        return;
-    }
     try {
         MEASURE_EXECUTION_TIME(send(source, width, serverPeerRank(), tag));
     } catch (...) {}
 }
 
 void Comm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
-        MEASURE_EXECUTION_TIME(send(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        return;
-    }
     try {
         MEASURE_EXECUTION_TIME(send(source, width, serverPeerRank(), tag));
     } catch (...) {}
@@ -156,30 +141,12 @@ void Comm::serverSendImpl_(const std::string &source, int tag) {
 }
 
 void Comm::serverReceiveImpl_(int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        std::vector<int64_t> envelope;
-        MEASURE_EXECUTION_TIME(receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        auto payload = InPathSwitchSimulator::unpackPayload(envelope);
-        if (payload.empty()) {
-            throw std::runtime_error("Missing scalar payload in in-path switch envelope.");
-        }
-        source = payload[0];
-        return;
-    }
     try {
         MEASURE_EXECUTION_TIME(receive(source, width, serverPeerRank(), tag));
     } catch (...) {}
 }
 
 void Comm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        std::vector<int64_t> envelope;
-        MEASURE_EXECUTION_TIME(receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        source = InPathSwitchSimulator::unpackPayload(envelope);
-        return;
-    }
     try {
         MEASURE_EXECUTION_TIME(receive(source, width, serverPeerRank(), tag));
     } catch (...) {}
@@ -316,12 +283,6 @@ AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int coun
 }
 
 AbstractRequest *Comm::serverSendAsyncImpl_(const int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        std::vector<int64_t> payload{source};
-        auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
-        return sendAsync(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-    }
     try {
         return sendAsync(source, width, serverPeerRank(), tag);
     } catch (...) {
@@ -330,11 +291,6 @@ AbstractRequest *Comm::serverSendAsyncImpl_(const int64_t &source, int width, in
 }
 
 AbstractRequest *Comm::serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        auto request = InPathSwitchSimulator::makeSwitchRequest(tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
-        return sendAsync(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-    }
     try {
         return sendAsync(source, width, serverPeerRank(), tag);
     } catch (...) {
@@ -351,18 +307,6 @@ AbstractRequest *Comm::serverSendAsyncImpl_(const std::string &source, int tag) 
 }
 
 AbstractRequest *Comm::serverReceiveAsyncImpl_(int64_t &target, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        return new FutureRequestWrapper(std::async(std::launch::async, [&target, physicalTag]() {
-            std::vector<int64_t> envelope;
-            receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-            auto payload = InPathSwitchSimulator::unpackPayload(envelope);
-            if (payload.empty()) {
-                throw std::runtime_error("Missing scalar payload in in-path switch envelope.");
-            }
-            target = payload[0];
-        }));
-    }
     try {
         return receiveAsync(target, width, serverPeerRank(), tag);
     } catch (...) {
@@ -371,18 +315,6 @@ AbstractRequest *Comm::serverReceiveAsyncImpl_(int64_t &target, int width, int t
 }
 
 AbstractRequest *Comm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
-        const int physicalTag = inPathPhysicalTag();
-        return new FutureRequestWrapper(std::async(std::launch::async, [&target, count, physicalTag]() {
-            std::vector<int64_t> envelope;
-            receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-            auto payload = InPathSwitchSimulator::unpackPayload(envelope);
-            if (count >= 0 && static_cast<int>(payload.size()) > count) {
-                payload.resize(count);
-            }
-            target = std::move(payload);
-        }));
-    }
     try {
         return receiveAsync(target, count, width, serverPeerRank(), tag);
     } catch (...) {

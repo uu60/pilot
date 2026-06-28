@@ -2,7 +2,7 @@
 
 #include "comm/Comm.h"
 #include "comm/InPathSwitchSimulator.h"
-#include "comm/TcpComm.h"
+#include "comm/RoutedComm.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
 #include "parallel/LaneThreadPool.h"
@@ -16,8 +16,8 @@ void PilotSystem::init(int argc, char **argv) {
     Comm::init(argc, argv);
 
     if (InPathSwitchSimulator::isSwitchRank()) {
-        if (TcpComm::enabled()) {
-            TcpComm::runSwitch();
+        if (RoutedComm::enabled()) {
+            RoutedComm::runSwitch();
         } else {
             InPathSwitchSimulator::run();
         }
@@ -33,8 +33,8 @@ void PilotSystem::init(int argc, char **argv) {
 
 void PilotSystem::finalize() {
     if (Comm::isServer()) {
-        if (TcpComm::enabled()) {
-            TcpComm::sendShutdown();
+        if (RoutedComm::enabled()) {
+            RoutedComm::sendShutdown();
         } else {
             InPathSwitchSimulator::sendShutdown();
         }

@@ -1,12 +1,12 @@
-#ifndef PILOT_TCP_COMM_H
-#define PILOT_TCP_COMM_H
+#ifndef PILOT_ROUTED_COMM_H
+#define PILOT_ROUTED_COMM_H
 
 #include "comm/MpiComm.h"
 #include "comm/transport/SwitchFrameTransport.h"
 
 #include <vector>
 
-class TcpComm : public MpiComm {
+class RoutedComm : public MpiComm {
 public:
     static bool enabled();
 

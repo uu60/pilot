@@ -1,7 +1,9 @@
-#include "comm/TcpComm.h"
+#include "comm/RoutedComm.h"
 
 #include "comm/Comm.h"
 #include "comm/InPathSwitchSimulator.h"
+#include "comm/transport/MpiSoftwareSwitchTransport.h"
+#include "comm/transport/SimulatorSwitchTransport.h"
 #include "comm/transport/TcpSoftwareSwitchTransport.h"
 #include "comm/item/FutureRequestWrapper.h"
 #include "conf/Conf.h"
@@ -18,21 +20,26 @@ int inPathPhysicalTag() {
 }
 }
 
-bool TcpComm::enabled() {
-    return Conf::ENABLE_IN_PATH_BMT_SWITCH && Conf::SERVER_TRANSPORT == Conf::SERVER_TRANSPORT_TCP;
+bool RoutedComm::enabled() {
+    return Conf::ENABLE_IN_PATH_BMT_SWITCH;
 }
 
-void TcpComm::runSwitch() {
+void RoutedComm::runSwitch() {
     if (!enabled() || Comm::rank() != Conf::IN_PATH_SWITCH_RANK) {
         return;
     }
     if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-        throw std::runtime_error("TCP simulator-level switch is not connected yet.");
+        SimulatorSwitchTransport::runSwitch();
+        return;
     }
-    TcpSoftwareSwitchTransport::runSwitch();
+    if (Conf::SERVER_TRANSPORT == Conf::SERVER_TRANSPORT_TCP) {
+        TcpSoftwareSwitchTransport::runSwitch();
+        return;
+    }
+    MpiSoftwareSwitchTransport::runSwitch();
 }
 
-void TcpComm::sendShutdown() {
+void RoutedComm::sendShutdown() {
     if (!enabled() || !Comm::isServerRank(Comm::rank())) {
         return;
     }
@@ -40,7 +47,7 @@ void TcpComm::sendShutdown() {
     transport().send(PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, InPathSwitchSimulator::CONTROL_TAG, stop});
 }
 
-void TcpComm::serverSendImpl_(const int64_t &source, int width, int tag) {
+void RoutedComm::serverSendImpl_(const int64_t &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         Comm::serverSendImpl_(source, width, tag);
         return;
@@ -53,7 +60,7 @@ void TcpComm::serverSendImpl_(const int64_t &source, int width, int tag) {
     send(physicalTag, request);
 }
 
-void TcpComm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
+void RoutedComm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         Comm::serverSendImpl_(source, width, tag);
         return;
@@ -65,7 +72,7 @@ void TcpComm::serverSendImpl_(const std::vector<int64_t> &source, int width, int
     send(physicalTag, request);
 }
 
-void TcpComm::serverReceiveImpl_(int64_t &source, int width, int tag) {
+void RoutedComm::serverReceiveImpl_(int64_t &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         Comm::serverReceiveImpl_(source, width, tag);
         return;
@@ -79,7 +86,7 @@ void TcpComm::serverReceiveImpl_(int64_t &source, int width, int tag) {
     source = payload[0];
 }
 
-void TcpComm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag) {
+void RoutedComm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         Comm::serverReceiveImpl_(source, width, tag);
         return;
@@ -89,7 +96,7 @@ void TcpComm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int ta
     source = InPathSwitchSimulator::unpackPayload(receive(physicalTag));
 }
 
-AbstractRequest *TcpComm::serverSendAsyncImpl_(const int64_t &source, int width, int tag) {
+AbstractRequest *RoutedComm::serverSendAsyncImpl_(const int64_t &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         return Comm::serverSendAsyncImpl_(source, width, tag);
     }
@@ -103,7 +110,7 @@ AbstractRequest *TcpComm::serverSendAsyncImpl_(const int64_t &source, int width,
     }));
 }
 
-AbstractRequest *TcpComm::serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag) {
+AbstractRequest *RoutedComm::serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         return Comm::serverSendAsyncImpl_(source, width, tag);
     }
@@ -116,7 +123,7 @@ AbstractRequest *TcpComm::serverSendAsyncImpl_(const std::vector<int64_t> &sourc
     }));
 }
 
-AbstractRequest *TcpComm::serverReceiveAsyncImpl_(int64_t &target, int width, int tag) {
+AbstractRequest *RoutedComm::serverReceiveAsyncImpl_(int64_t &target, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         return Comm::serverReceiveAsyncImpl_(target, width, tag);
     }
@@ -131,7 +138,7 @@ AbstractRequest *TcpComm::serverReceiveAsyncImpl_(int64_t &target, int width, in
     }));
 }
 
-AbstractRequest *TcpComm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag) {
+AbstractRequest *RoutedComm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag) {
     if (!Comm::isServerRank(Comm::rank())) {
         return Comm::serverReceiveAsyncImpl_(target, count, width, tag);
     }
@@ -146,25 +153,31 @@ AbstractRequest *TcpComm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, 
     }));
 }
 
-void TcpComm::finalize_() {
-    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SOFTWARE) {
+void RoutedComm::finalize_() {
+    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SOFTWARE ||
+        Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
         transport().finalize();
     }
     MpiComm::finalize_();
 }
 
-SwitchFrameTransport &TcpComm::transport() {
+SwitchFrameTransport &RoutedComm::transport() {
     if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-        throw std::runtime_error("TCP simulator-level switch transport is not connected yet.");
+        static SimulatorSwitchTransport simulatorTransport;
+        return simulatorTransport;
+    }
+    if (Conf::SERVER_TRANSPORT == Conf::SERVER_TRANSPORT_MPI) {
+        static MpiSoftwareSwitchTransport mpiTransport;
+        return mpiTransport;
     }
     static TcpSoftwareSwitchTransport tcpTransport;
     return tcpTransport;
 }
 
-void TcpComm::send(int physicalTag, const std::vector<int64_t> &request) {
+void RoutedComm::send(int physicalTag, const std::vector<int64_t> &request) {
     transport().send(PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, physicalTag, request});
 }
 
-std::vector<int64_t> TcpComm::receive(int physicalTag) {
+std::vector<int64_t> RoutedComm::receive(int physicalTag) {
     return transport().receive(physicalTag).words;
 }
