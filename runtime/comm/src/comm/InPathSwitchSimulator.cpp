@@ -11,6 +11,7 @@
 #include <mutex>
 #include <random>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 struct PendingTrailerShares {
@@ -71,60 +72,35 @@ bool InPathSwitchSimulator::shouldRouteServerTraffic() {
 
 std::vector<int64_t> InPathSwitchSimulator::makeSwitchRequest(int tag, int bmtRequestCount,
                                                               const std::vector<int64_t> &payload) {
-    const int laneId = IntermediateDataSupport::currentLane();
-    std::vector<int64_t> request;
-    request.reserve(5 + payload.size());
-    request.push_back(REQUEST_MAGIC);
-    request.push_back(tag);
-    request.push_back(laneId);
-    request.push_back(std::max(0, bmtRequestCount));
-    request.push_back(static_cast<int64_t>(payload.size()));
-    request.insert(request.end(), payload.begin(), payload.end());
-    return request;
+    PilotPacketRequest packet;
+    packet.tag = tag;
+    packet.laneId = IntermediateDataSupport::currentLane();
+    packet.bmtRequestCount = bmtRequestCount;
+    packet.payload = payload;
+    return PilotPacket::encodeRequest(packet);
 }
 
 void InPathSwitchSimulator::unpackSwitchRequest(const std::vector<int64_t> &request,
                                                 int &laneId,
                                                 int &bmtRequestCount,
                                                 std::vector<int64_t> &payload) {
-    if (request.size() >= 5 && request[0] == REQUEST_MAGIC) {
-        laneId = static_cast<int>(request[2]);
-        bmtRequestCount = static_cast<int>(request[3]);
-        const auto payloadSize = static_cast<size_t>(request[4]);
-        if (request.size() != 5 + payloadSize) {
-            throw std::runtime_error("Invalid in-path switch request size.");
-        }
-        payload.assign(request.begin() + 5, request.end());
-        return;
-    }
-
-    // Backward-compatible path for messages sent before request wrapping.
-    laneId = 0;
-    bmtRequestCount = 0;
-    payload = request;
+    auto packet = PilotPacket::decodeRequest(request);
+    laneId = packet.laneId;
+    bmtRequestCount = packet.bmtRequestCount;
+    payload = std::move(packet.payload);
 }
 
 std::vector<int64_t> InPathSwitchSimulator::makeEnvelope(int srcRank, int dstRank, int tag, int laneId,
                                                          const std::vector<int64_t> &payload,
                                                          const std::vector<RawBitwiseBmt> &trailer) {
-    const int trailerWords = static_cast<int>(trailer.size()) * 3;
-    std::vector<int64_t> envelope;
-    envelope.reserve(7 + payload.size() + static_cast<size_t>(trailerWords));
-    envelope.push_back(ENVELOPE_MAGIC);
-    envelope.push_back(static_cast<int64_t>(payload.size()));
-    envelope.push_back(trailerWords);
-    envelope.push_back(srcRank);
-    envelope.push_back(dstRank);
-    envelope.push_back(tag);
-    envelope.push_back(laneId);
-    envelope.insert(envelope.end(), payload.begin(), payload.end());
-
-    for (const auto &bmt: trailer) {
-        envelope.push_back(bmt.a);
-        envelope.push_back(bmt.b);
-        envelope.push_back(bmt.c);
-    }
-    return envelope;
+    PilotPacketEnvelope packet;
+    packet.srcRank = srcRank;
+    packet.dstRank = dstRank;
+    packet.tag = tag;
+    packet.laneId = laneId;
+    packet.payload = payload;
+    packet.trailer = trailer;
+    return PilotPacket::encodeEnvelope(packet);
 }
 
 std::vector<int64_t> InPathSwitchSimulator::forwardRequest(int srcRank, int tag,
@@ -133,37 +109,17 @@ std::vector<int64_t> InPathSwitchSimulator::forwardRequest(int srcRank, int tag,
         throw std::runtime_error("Switch simulator only forwards party 0/1 traffic.");
     }
     const int dstRank = srcRank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
-    int laneId = 0;
-    int bmtRequestCount = 0;
-    std::vector<int64_t> payload;
-    unpackSwitchRequest(request, laneId, bmtRequestCount, payload);
-    auto trailer = generateShareBundle(laneId, tag, dstRank, bmtRequestCount);
-    return makeEnvelope(srcRank, dstRank, tag, laneId, payload, trailer);
+    auto packet = PilotPacket::decodeRequest(request);
+    auto trailer = generateShareBundle(packet.laneId, tag, dstRank, packet.bmtRequestCount);
+    return makeEnvelope(srcRank, dstRank, tag, packet.laneId, packet.payload, trailer);
 }
 
 std::vector<int64_t> InPathSwitchSimulator::unpackPayload(const std::vector<int64_t> &envelope) {
-    if (envelope.size() < 7 || envelope[0] != ENVELOPE_MAGIC) {
-        throw std::runtime_error("Invalid in-path switch envelope.");
+    auto packet = PilotPacket::decodeEnvelope(envelope);
+    if (!packet.trailer.empty()) {
+        IntermediateDataSupport::offerRawBitwiseBmts(packet.laneId, packet.trailer);
     }
-    const auto payloadSize = static_cast<size_t>(envelope[1]);
-    const auto trailerSize = static_cast<size_t>(envelope[2]);
-    if (envelope.size() != 7 + payloadSize + trailerSize) {
-        throw std::runtime_error("In-path switch envelope size mismatch.");
-    }
-    if (trailerSize % 3 != 0) {
-        throw std::runtime_error("In-path switch BMT trailer size mismatch.");
-    }
-    const int laneId = static_cast<int>(envelope[6]);
-    std::vector<RawBitwiseBmt> trailer;
-    trailer.reserve(trailerSize / 3);
-    auto trailerIt = envelope.begin() + 7 + payloadSize;
-    for (size_t i = 0; i < trailerSize; i += 3) {
-        trailer.push_back(RawBitwiseBmt{*(trailerIt + i), *(trailerIt + i + 1), *(trailerIt + i + 2)});
-    }
-    if (!trailer.empty()) {
-        IntermediateDataSupport::offerRawBitwiseBmts(laneId, trailer);
-    }
-    return std::vector<int64_t>(envelope.begin() + 7, envelope.begin() + 7 + payloadSize);
+    return packet.payload;
 }
 
 void InPathSwitchSimulator::sendShutdown() {

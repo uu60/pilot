@@ -4,12 +4,13 @@
 #include <cstdint>
 #include <vector>
 
+#include "comm/PilotPacket.h"
 #include "intermediate/item/BitwiseBmt.h"
 
 class InPathSwitchSimulator {
 public:
-    static constexpr int64_t ENVELOPE_MAGIC = 0x5041525345434550LL; // "PARSECEP" marker
-    static constexpr int64_t REQUEST_MAGIC = 0x5041525352455154LL;  // "PARSREQT" marker
+    static constexpr int64_t ENVELOPE_MAGIC = PilotPacket::ENVELOPE_MAGIC;
+    static constexpr int64_t REQUEST_MAGIC = PilotPacket::REQUEST_MAGIC;
     static constexpr int64_t TRAILER_MAGIC = 0x424d5454524c524cLL;  // "BMTTRLRL" marker
     static constexpr int64_t SHUTDOWN_MAGIC = 0x5357485f53544f50LL; // "SWH_STOP" marker
     static constexpr int CONTROL_TAG = 0x3ffffffe;
