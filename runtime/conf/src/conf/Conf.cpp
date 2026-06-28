@@ -78,6 +78,17 @@ Conf::SimulationLevelT getSimulationLevel(int argc, char **argv) {
     }
     throw std::runtime_error("Unsupported --simulation_level. Expected software or simulator.");
 }
+
+Conf::RoutedNetworkT getRoutedNetwork(int argc, char **argv) {
+    const auto value = getString(argc, argv, "routed_network", "tcp");
+    if (value == "tcp") {
+        return Conf::ROUTED_NETWORK_TCP;
+    }
+    if (value == "tap") {
+        return Conf::ROUTED_NETWORK_TAP;
+    }
+    throw std::runtime_error("Unsupported --routed_network. Expected tcp or tap.");
+}
 }
 
 void Conf::init(int argc, char **argv) {
@@ -85,6 +96,9 @@ void Conf::init(int argc, char **argv) {
     ROUTED_RANK = getRoutedRank(argc, argv);
     ROUTED_BASE_PORT = getInt(argc, argv, "routed_base_port",
                               getInt(argc, argv, "standalone_base_port", ROUTED_BASE_PORT));
+    ROUTED_NETWORK = getRoutedNetwork(argc, argv);
+    ROUTED_TAP_SERVER0 = getString(argc, argv, "routed_tap_server0", ROUTED_TAP_SERVER0);
+    ROUTED_TAP_SERVER1 = getString(argc, argv, "routed_tap_server1", ROUTED_TAP_SERVER1);
     SERVER_TRANSPORT = getServerTransport(argc, argv);
     SIMULATION_LEVEL = getSimulationLevel(argc, argv);
     TCP_SWITCH_PORT = getInt(argc, argv, "tcp_switch_port", TCP_SWITCH_PORT);

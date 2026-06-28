@@ -15,6 +15,7 @@
 #include "utils/Log.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -47,6 +48,13 @@ int Comm::rank() {
 
 void Comm::init(int argc, char **argv) {
     if (Conf::COMM_TYPE == Conf::MPI) {
+        if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
+            Log::e(
+                "OpenMPI communication is disabled for simulator-level switch mode. "
+                "Use --comm=routed and put the external switch simulator in the network path.");
+            LaneThreadPool::finalize();
+            std::exit(EXIT_FAILURE);
+        }
         impl = new MpiComm();
     } else if (Conf::COMM_TYPE == Conf::ROUTED) {
         impl = new RoutedComm();

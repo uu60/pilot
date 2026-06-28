@@ -32,6 +32,10 @@ bool hasArg(int argc, char **argv, const std::string &name) {
     return false;
 }
 
+bool isSimulatorMode(int argc, char **argv) {
+    return getValueArg(argc, argv, "simulation_level", "software") == "simulator";
+}
+
 std::vector<std::string> makeArgs(int argc, char **argv, const std::string &program, const std::string &role) {
     std::vector<std::string> args;
     args.push_back(program);
@@ -42,6 +46,9 @@ std::vector<std::string> makeArgs(int argc, char **argv, const std::string &prog
     }
     if (!hasArg(argc, argv, "simulation_level")) {
         args.push_back("--simulation_level=software");
+    }
+    if (!hasArg(argc, argv, "routed_network")) {
+        args.push_back(isSimulatorMode(argc, argv) ? "--routed_network=tap" : "--routed_network=tcp");
     }
 
     for (int i = 1; i < argc; ++i) {
@@ -77,7 +84,9 @@ pid_t spawnRole(const std::vector<std::string> &args) {
 
 int main(int argc, char **argv) {
     const auto program = getValueArg(argc, argv, "program", "build/db/benchmark/pilot_db_sort");
-    const std::vector<std::string> roles{"switch", "server0", "server1", "client"};
+    const std::vector<std::string> roles = isSimulatorMode(argc, argv)
+                                               ? std::vector<std::string>{"server0", "server1", "client"}
+                                               : std::vector<std::string>{"switch", "server0", "server1", "client"};
     std::vector<pid_t> pids;
     pids.reserve(roles.size());
 
