@@ -1,4 +1,4 @@
-#include "comm/PilotPacket.h"
+#include "comm/protocol/PilotPacket.h"
 
 #include <algorithm>
 #include <stdexcept>

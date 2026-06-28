@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "comm/PilotPacket.h"
+#include "comm/protocol/PilotPacket.h"
 #include "intermediate/item/BitwiseBmt.h"
 
 class InPathSwitchSimulator {

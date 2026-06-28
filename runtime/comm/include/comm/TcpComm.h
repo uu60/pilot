@@ -2,13 +2,9 @@
 #define PILOT_TCP_COMM_H
 
 #include "comm/MpiComm.h"
-#include "comm/PilotFrame.h"
+#include "comm/transport/SwitchFrameTransport.h"
 
-#include <condition_variable>
-#include <deque>
-#include <map>
-#include <mutex>
-#include <thread>
+#include <vector>
 
 class TcpComm : public MpiComm {
 public:
@@ -38,27 +34,11 @@ protected:
     void finalize_() override;
 
 private:
+    static SwitchFrameTransport &transport();
+
     static void send(int physicalTag, const std::vector<int64_t> &request);
 
     static std::vector<int64_t> receive(int physicalTag);
-
-    static void ensureClientConnected();
-
-    static void receiveLoop();
-
-    static void finalizeTcp();
-
-    static void sendFrame(int fd, const PilotFrame &frame);
-
-    static bool receiveFrame(int fd, PilotFrame &frame);
-
-    inline static std::mutex _mutex;
-    inline static std::condition_variable _cv;
-    inline static std::map<int, std::deque<std::vector<int64_t>>> _pending;
-    inline static std::thread _receiveThread;
-    inline static int _socketFd = -1;
-    inline static bool _connected = false;
-    inline static bool _finalized = false;
 };
 
 #endif
