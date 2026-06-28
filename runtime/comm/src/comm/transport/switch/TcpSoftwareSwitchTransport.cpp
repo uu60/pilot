@@ -1,4 +1,4 @@
-#include "comm/transport/TcpSoftwareSwitchTransport.h"
+#include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
 
 #include "comm/Comm.h"
 #include "comm/InPathSwitchSimulator.h"
@@ -179,6 +179,7 @@ void TcpSoftwareSwitchTransport::runSwitch() {
     }
 
     std::atomic_int shutdowns{0};
+    std::mutex forwardMutex;
     auto worker = [&](int srcRank) {
         const int dstRank = srcRank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
         while (shutdowns.load() < 2) {
@@ -192,6 +193,7 @@ void TcpSoftwareSwitchTransport::runSwitch() {
                 ++shutdowns;
                 break;
             }
+            std::lock_guard<std::mutex> lock(forwardMutex);
             auto envelope = InPathSwitchSimulator::forwardRequest(srcRank, request.physicalTag, request.words);
             sendFrame(serverFds[static_cast<size_t>(dstRank)],
                       PilotFrame{Conf::IN_PATH_SWITCH_RANK, dstRank, request.physicalTag, std::move(envelope)});

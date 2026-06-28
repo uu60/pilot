@@ -2,14 +2,15 @@
 #define PILOT_ROUTED_COMM_H
 
 #include "comm/Comm.h"
-#include "comm/transport/TcpSoftwareSwitchTransport.h"
+#include "comm/transport/peer/RoutedPeerTransport.h"
+#include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
 
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 class RoutedComm : public Comm {
@@ -91,16 +92,12 @@ private:
         std::string text;
     };
 
-    static int portForRank(int rank);
-
-    void listenerLoop();
-
     void enqueueMessage(int senderRank, int tag, int type, Message message);
 
     Message waitMessage(int senderRank, int tag, int type);
 
-    static void sendWordsToRank(int receiverRank, int senderRank, int tag, int type,
-                                const std::vector<int64_t> &words, const std::string &text);
+    void sendWordsToRank(int receiverRank, int senderRank, int tag, int type,
+                         const std::vector<int64_t> &words, const std::string &text);
 
     static void routeSend(int physicalTag, const std::vector<int64_t> &request);
 
@@ -109,8 +106,7 @@ private:
     static TcpSoftwareSwitchTransport &routeTransport();
 
     int _rank = 0;
-    int _listenFd = -1;
-    std::thread _listenerThread;
+    std::unique_ptr<RoutedPeerTransport> _peerTransport;
     std::mutex _mutex;
     std::condition_variable _cv;
     std::map<MessageKey, std::deque<Message>> _pending;

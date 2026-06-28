@@ -2,26 +2,18 @@
 
 #include "comm/InPathSwitchSimulator.h"
 #include "comm/item/FutureRequestWrapper.h"
-#include "comm/transport/TcpSoftwareSwitchTransport.h"
+#include "comm/transport/peer/TapRoutedPeerTransport.h"
+#include "comm/transport/peer/TcpRoutedPeerTransport.h"
+#include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
 
-#include <arpa/inet.h>
-#include <cerrno>
-#include <chrono>
-#include <cstring>
 #include <future>
-#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
-#include <sys/socket.h>
-#include <thread>
-#include <unistd.h>
 #include <utility>
 
 namespace {
-constexpr int kListenBacklog = 16;
-
 int inPathPhysicalTag() {
     return Comm::TAG_SWITCH_LANE_BASE + IntermediateDataSupport::currentLane();
 }
@@ -47,107 +39,16 @@ void validateRoutedNetworkMode() {
         return;
     }
 
-    throw std::runtime_error(
-        "routed_network=tap is reserved for the external transparent switch simulator path, "
-        "but the TAP peer backend is not implemented yet.");
-}
-
-void closeFd(int &fd) {
-    if (fd >= 0) {
-        close(fd);
-        fd = -1;
+    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SOFTWARE) {
+        throw std::runtime_error("routed_network=tap is only supported for simulator-level switch mode.");
     }
 }
 
-void throwSystemError(const char *message) {
-    throw std::runtime_error(std::string(message) + ": " + std::strerror(errno));
-}
-
-void writeAll(int fd, const void *data, size_t bytes) {
-    const auto *ptr = static_cast<const char *>(data);
-    while (bytes > 0) {
-        const ssize_t written = ::send(fd, ptr, bytes, 0);
-        if (written < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            throwSystemError("routed socket send failed");
-        }
-        ptr += written;
-        bytes -= static_cast<size_t>(written);
+std::unique_ptr<RoutedPeerTransport> makePeerTransport() {
+    if (Conf::ROUTED_NETWORK == Conf::ROUTED_NETWORK_TCP) {
+        return std::make_unique<TcpRoutedPeerTransport>();
     }
-}
-
-bool readAll(int fd, void *data, size_t bytes) {
-    auto *ptr = static_cast<char *>(data);
-    while (bytes > 0) {
-        const ssize_t readBytes = recv(fd, ptr, bytes, 0);
-        if (readBytes == 0) {
-            return false;
-        }
-        if (readBytes < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            throwSystemError("routed socket receive failed");
-        }
-        ptr += readBytes;
-        bytes -= static_cast<size_t>(readBytes);
-    }
-    return true;
-}
-
-int createServerSocket(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        throwSystemError("routed server socket creation failed");
-    }
-
-    int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<uint16_t>(port));
-    if (bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
-        close(fd);
-        throwSystemError("routed server socket bind failed");
-    }
-    if (listen(fd, kListenBacklog) != 0) {
-        close(fd);
-        throwSystemError("routed server socket listen failed");
-    }
-    return fd;
-}
-
-int connectToPort(int port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        throwSystemError("routed client socket creation failed");
-    }
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<uint16_t>(port));
-
-    for (int attempt = 0; attempt < 300; ++attempt) {
-        if (connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0) {
-            return fd;
-        }
-        if (errno == EISCONN) {
-            return fd;
-        }
-        if (errno != ECONNREFUSED && errno != ENOENT) {
-            close(fd);
-            throwSystemError("routed socket connect failed");
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    close(fd);
-    throw std::runtime_error("Timed out connecting to routed rank.");
+    return std::make_unique<TapRoutedPeerTransport>();
 }
 }
 
@@ -196,8 +97,13 @@ void RoutedComm::init_(int argc, char **argv) {
     (void) argv;
     validateRoutedNetworkMode();
     _rank = Conf::ROUTED_RANK;
-    _listenFd = createServerSocket(portForRank(_rank));
-    _listenerThread = std::thread(&RoutedComm::listenerLoop, this);
+    _peerTransport = makePeerTransport();
+    _peerTransport->init(_rank, [this](RoutedPeerMessage message) {
+        Message queued;
+        queued.words = std::move(message.words);
+        queued.text = std::move(message.text);
+        enqueueMessage(message.senderRank, message.tag, message.type, std::move(queued));
+    });
 }
 
 void RoutedComm::finalize_() {
@@ -210,10 +116,10 @@ void RoutedComm::finalize_() {
             return;
         }
         _finalized = true;
-        closeFd(_listenFd);
     }
-    if (_listenerThread.joinable()) {
-        _listenerThread.join();
+    if (_peerTransport) {
+        _peerTransport->finalize();
+        _peerTransport.reset();
     }
 }
 
@@ -368,7 +274,7 @@ AbstractRequest *RoutedComm::serverSendAsyncImpl_(const int64_t &source, int wid
     auto request = InPathSwitchSimulator::makeSwitchRequest(
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
     const int peerRank = ::serverPeerRank(_rank);
-    return new FutureRequestWrapper(std::async(std::launch::async, [physicalTag, peerRank, request = std::move(request)]() {
+    return new FutureRequestWrapper(std::async(std::launch::async, [this, physicalTag, peerRank, request = std::move(request)]() {
         if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
             sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
             return;
@@ -385,7 +291,7 @@ AbstractRequest *RoutedComm::serverSendAsyncImpl_(const std::vector<int64_t> &so
     auto request = InPathSwitchSimulator::makeSwitchRequest(
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
     const int peerRank = ::serverPeerRank(_rank);
-    return new FutureRequestWrapper(std::async(std::launch::async, [physicalTag, peerRank, request = std::move(request)]() {
+    return new FutureRequestWrapper(std::async(std::launch::async, [this, physicalTag, peerRank, request = std::move(request)]() {
         if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
             sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
             return;
@@ -429,52 +335,6 @@ AbstractRequest *RoutedComm::serverReceiveAsyncImpl_(std::vector<int64_t> &targe
     }));
 }
 
-int RoutedComm::portForRank(int rank) {
-    return Conf::ROUTED_BASE_PORT + rank;
-}
-
-void RoutedComm::listenerLoop() {
-    while (true) {
-        int fd = accept(_listenFd, nullptr, nullptr);
-        if (fd < 0) {
-            std::lock_guard<std::mutex> lock(_mutex);
-            if (_finalized) {
-                return;
-            }
-            if (errno == EINTR) {
-                continue;
-            }
-            return;
-        }
-
-        int64_t header[5]{};
-        if (!readAll(fd, header, sizeof(header))) {
-            close(fd);
-            continue;
-        }
-        const int senderRank = static_cast<int>(header[0]);
-        const int tag = static_cast<int>(header[2]);
-        const int type = static_cast<int>(header[3]);
-        const auto size = static_cast<size_t>(header[4]);
-        Message message;
-        if (type == STRING_MESSAGE) {
-            message.text.resize(size);
-            if (size > 0 && !readAll(fd, message.text.data(), size)) {
-                close(fd);
-                continue;
-            }
-        } else {
-            message.words.resize(size);
-            if (size > 0 && !readAll(fd, message.words.data(), size * sizeof(int64_t))) {
-                close(fd);
-                continue;
-            }
-        }
-        close(fd);
-        enqueueMessage(senderRank, tag, type, std::move(message));
-    }
-}
-
 void RoutedComm::enqueueMessage(int senderRank, int tag, int type, Message message) {
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -493,26 +353,11 @@ RoutedComm::Message RoutedComm::waitMessage(int senderRank, int tag, int type) {
 }
 
 void RoutedComm::sendWordsToRank(int receiverRank, int senderRank, int tag, int type,
-                                     const std::vector<int64_t> &words, const std::string &text) {
-    int fd = connectToPort(portForRank(receiverRank));
-    const int64_t size = type == STRING_MESSAGE ? static_cast<int64_t>(text.size())
-                                                : static_cast<int64_t>(words.size());
-    const int64_t header[5]{
-        static_cast<int64_t>(senderRank),
-        static_cast<int64_t>(receiverRank),
-        static_cast<int64_t>(tag),
-        static_cast<int64_t>(type),
-        size
-    };
-    writeAll(fd, header, sizeof(header));
-    if (type == STRING_MESSAGE) {
-        if (!text.empty()) {
-            writeAll(fd, text.data(), text.size());
-        }
-    } else if (!words.empty()) {
-        writeAll(fd, words.data(), words.size() * sizeof(int64_t));
+                                 const std::vector<int64_t> &words, const std::string &text) {
+    if (!_peerTransport) {
+        throw std::runtime_error("Routed peer transport is not initialized.");
     }
-    close(fd);
+    _peerTransport->send(RoutedPeerMessage{senderRank, receiverRank, tag, type, words, text});
 }
 
 void RoutedComm::routeSend(int physicalTag, const std::vector<int64_t> &request) {

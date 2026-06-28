@@ -1,7 +1,7 @@
 #ifndef PILOT_TCP_SOFTWARE_SWITCH_TRANSPORT_H
 #define PILOT_TCP_SOFTWARE_SWITCH_TRANSPORT_H
 
-#include "comm/transport/SwitchFrameTransport.h"
+#include "comm/transport/switch/SwitchFrameTransport.h"
 
 #include <condition_variable>
 #include <deque>

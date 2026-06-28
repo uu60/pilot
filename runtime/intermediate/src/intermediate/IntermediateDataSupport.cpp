@@ -32,7 +32,8 @@ void IntermediateDataSupport::requestBitwiseBmts(int count) {
     }
 
     std::lock_guard<std::mutex> lock(_mutex);
-    _bitwiseBmtRequestCounts[currentLane()] = count;
+    const int lane = currentLane();
+    _bitwiseBmtRequestCounts[lane] = count;
 }
 
 int IntermediateDataSupport::consumeBitwiseBmtRequestCount() {
