@@ -10,6 +10,7 @@ add_subdirectory(runtime)
 add_subdirectory(primitive)
 add_subdirectory(db)
 add_subdirectory(launcher)
+add_subdirectory(switch_simulator)
 
 add_executable(pilot main.cpp)
 target_link_libraries(pilot PRIVATE pilot_db)

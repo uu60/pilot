@@ -99,6 +99,7 @@ void Conf::init(int argc, char **argv) {
     ROUTED_NETWORK = getRoutedNetwork(argc, argv);
     ROUTED_TAP_SERVER0 = getString(argc, argv, "routed_tap_server0", ROUTED_TAP_SERVER0);
     ROUTED_TAP_SERVER1 = getString(argc, argv, "routed_tap_server1", ROUTED_TAP_SERVER1);
+    ROUTED_TAP_CLIENT = getString(argc, argv, "routed_tap_client", ROUTED_TAP_CLIENT);
     SERVER_TRANSPORT = getServerTransport(argc, argv);
     SIMULATION_LEVEL = getSimulationLevel(argc, argv);
     TCP_SWITCH_PORT = getInt(argc, argv, "tcp_switch_port", TCP_SWITCH_PORT);

@@ -20,6 +20,7 @@ public:
     inline static RoutedNetworkT ROUTED_NETWORK = ROUTED_NETWORK_TCP;
     inline static std::string ROUTED_TAP_SERVER0 = "tap0";
     inline static std::string ROUTED_TAP_SERVER1 = "tap1";
+    inline static std::string ROUTED_TAP_CLIENT = "tap2";
     inline static bool ENABLE_CLASS_WISE_TIMING = false;
     inline static bool ENABLE_SIMD = false;
     inline static bool DISABLE_MULTI_THREAD = false;

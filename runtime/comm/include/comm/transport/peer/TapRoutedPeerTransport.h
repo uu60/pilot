@@ -3,6 +3,9 @@
 
 #include "comm/transport/peer/RoutedPeerTransport.h"
 
+#include <string>
+#include <thread>
+
 class TapRoutedPeerTransport : public RoutedPeerTransport {
 public:
     void init(int rank, MessageHandler handler) override;
@@ -10,6 +13,16 @@ public:
     void send(const RoutedPeerMessage &message) override;
 
     void finalize() override;
+
+private:
+    void receiveLoop();
+
+    int _rank = 0;
+    int _fd = -1;
+    std::string _interfaceName;
+    MessageHandler _handler;
+    std::thread _receiveThread;
+    bool _finalized = false;
 };
 
 #endif

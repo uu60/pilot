@@ -1,0 +1,2 @@
+add_executable(pilot_tap_switch main.cpp)
+target_link_libraries(pilot_tap_switch PRIVATE pilot_runtime)
