@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -39,6 +40,11 @@ bool isServerRank(int rank) {
     return rank == Comm::SERVER0_RANK || rank == Comm::SERVER1_RANK;
 }
 
+bool tapDebugEnabled() {
+    const char *value = std::getenv("PILOT_TAP_DEBUG");
+    return value != nullptr && std::string(value) != "0";
+}
+
 int peerServerRank(int rank) {
     return rank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
 }
@@ -63,11 +69,18 @@ void throwSystemError(const std::string &message) {
     throw std::runtime_error(message + ": " + std::strerror(errno));
 }
 
+void configureSocketBuffers(int fd) {
+    constexpr int BUFFER_BYTES = 4 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &BUFFER_BYTES, sizeof(BUFFER_BYTES));
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &BUFFER_BYTES, sizeof(BUFFER_BYTES));
+}
+
 int openRawInterface(const std::string &name) {
     const int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd < 0) {
         throwSystemError("tap switch raw socket creation failed");
     }
+    configureSocketBuffers(fd);
 
     const unsigned int ifindex = if_nametoindex(name.c_str());
     if (ifindex == 0) {
@@ -99,6 +112,7 @@ void sendFrame(int fd, const RoutedPeerMessage &message, const std::string &inte
 
     sockaddr_ll address{};
     address.sll_family = AF_PACKET;
+    address.sll_protocol = htons(TapFrameCodec::ETHERTYPE);
     address.sll_ifindex = static_cast<int>(if_nametoindex(interfaceName.c_str()));
     address.sll_halen = static_cast<unsigned char>(dst.size());
     std::memcpy(address.sll_addr, dst.data(), dst.size());
@@ -106,6 +120,13 @@ void sendFrame(int fd, const RoutedPeerMessage &message, const std::string &inte
                                    reinterpret_cast<sockaddr *>(&address), sizeof(address));
     if (written < 0 || static_cast<size_t>(written) != frame.size()) {
         throwSystemError("tap switch frame send failed on " + interfaceName);
+    }
+    if (tapDebugEnabled()) {
+        Log::i("tap switch send iface=" + interfaceName +
+               " src_rank=" + std::to_string(message.senderRank) +
+               " dst_rank=" + std::to_string(message.receiverRank) +
+               " tag=" + std::to_string(message.tag) +
+               " type=" + std::to_string(message.type));
     }
 }
 
@@ -164,6 +185,13 @@ void runSwitch(std::array<Port, 3> &ports) {
             RoutedPeerMessage message;
             if (!TapFrameCodec::decode(buffer.data(), static_cast<size_t>(readBytes), message)) {
                 continue;
+            }
+            if (tapDebugEnabled()) {
+                Log::i("tap switch recv iface=" + port.interfaceName +
+                       " src_rank=" + std::to_string(message.senderRank) +
+                       " dst_rank=" + std::to_string(message.receiverRank) +
+                       " tag=" + std::to_string(message.tag) +
+                       " type=" + std::to_string(message.type));
             }
             if (message.receiverRank < 0 || message.receiverRank >= static_cast<int>(fdByRank.size())) {
                 continue;

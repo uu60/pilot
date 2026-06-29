@@ -3,9 +3,12 @@
 #include "comm/Comm.h"
 #include "comm/transport/peer/TapFrameCodec.h"
 #include "conf/Conf.h"
+#include "utils/Log.h"
 
 #include <array>
 #include <cerrno>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -40,12 +43,24 @@ void throwSystemError(const std::string &message) {
     throw std::runtime_error(message + ": " + std::strerror(errno));
 }
 
+bool tapDebugEnabled() {
+    const char *value = std::getenv("PILOT_TAP_DEBUG");
+    return value != nullptr && std::string(value) != "0";
+}
+
 #ifdef __linux__
+void configureSocketBuffers(int fd) {
+    constexpr int BUFFER_BYTES = 4 * 1024 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &BUFFER_BYTES, sizeof(BUFFER_BYTES));
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &BUFFER_BYTES, sizeof(BUFFER_BYTES));
+}
+
 int openRawInterface(const std::string &name) {
     const int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd < 0) {
         throwSystemError("TAP raw socket creation failed");
     }
+    configureSocketBuffers(fd);
 
     const unsigned int ifindex = if_nametoindex(name.c_str());
     if (ifindex == 0) {
@@ -80,6 +95,7 @@ void TapRoutedPeerTransport::init(int rank, MessageHandler handler) {
 #ifdef __linux__
     _fd = openRawInterface(_interfaceName);
     _receiveThread = std::thread(&TapRoutedPeerTransport::receiveLoop, this);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 #else
     throw std::runtime_error(
         "routed_network=tap currently requires Linux AF_PACKET raw sockets. "
@@ -97,9 +113,18 @@ void TapRoutedPeerTransport::send(const RoutedPeerMessage &message) {
 
     sockaddr_ll address{};
     address.sll_family = AF_PACKET;
+    address.sll_protocol = htons(TapFrameCodec::ETHERTYPE);
     address.sll_ifindex = static_cast<int>(if_nametoindex(_interfaceName.c_str()));
     address.sll_halen = static_cast<unsigned char>(dst.size());
     std::memcpy(address.sll_addr, dst.data(), dst.size());
+
+    if (tapDebugEnabled()) {
+        Log::i("tap send rank=" + std::to_string(message.senderRank) +
+               " iface=" + _interfaceName +
+               " dst_rank=" + std::to_string(message.receiverRank) +
+               " tag=" + std::to_string(message.tag) +
+               " type=" + std::to_string(message.type));
+    }
 
     const ssize_t written = sendto(_fd, frame.data(), frame.size(), 0,
                                    reinterpret_cast<sockaddr *>(&address), sizeof(address));
@@ -152,6 +177,13 @@ void TapRoutedPeerTransport::receiveLoop() {
         }
         if (message.receiverRank != _rank) {
             continue;
+        }
+        if (tapDebugEnabled()) {
+            Log::i("tap recv rank=" + std::to_string(_rank) +
+                   " iface=" + _interfaceName +
+                   " src_rank=" + std::to_string(message.senderRank) +
+                   " tag=" + std::to_string(message.tag) +
+                   " type=" + std::to_string(message.type));
         }
         _handler(std::move(message));
     }

@@ -36,6 +36,14 @@ bool isSimulatorMode(int argc, char **argv) {
     return getValueArg(argc, argv, "simulation_level", "software") == "simulator";
 }
 
+int getIntArg(int argc, char **argv, const std::string &name, int fallback) {
+    const auto value = getValueArg(argc, argv, name, "");
+    if (value.empty()) {
+        return fallback;
+    }
+    return std::stoi(value);
+}
+
 std::vector<std::string> makeArgs(int argc, char **argv, const std::string &program, const std::string &role) {
     std::vector<std::string> args;
     args.push_back(program);
@@ -84,6 +92,8 @@ pid_t spawnRole(const std::vector<std::string> &args) {
 
 int main(int argc, char **argv) {
     const auto program = getValueArg(argc, argv, "program", "build/db/benchmark/pilot_db_sort");
+    const bool simulatorMode = isSimulatorMode(argc, argv);
+    const int simulatorStartupDelayMs = getIntArg(argc, argv, "simulator_startup_delay_ms", 500);
     const std::vector<std::string> roles = isSimulatorMode(argc, argv)
                                                ? std::vector<std::string>{"server0", "server1", "client"}
                                                : std::vector<std::string>{"switch", "server0", "server1", "client"};
@@ -99,6 +109,9 @@ int main(int argc, char **argv) {
         pids.push_back(pid);
         if (role == "switch") {
             usleep(200000);
+        }
+        if (simulatorMode && role == "server1" && simulatorStartupDelayMs > 0) {
+            usleep(static_cast<useconds_t>(simulatorStartupDelayMs) * 1000);
         }
     }
 
