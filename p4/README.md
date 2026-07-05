@@ -26,9 +26,16 @@ Pilot header layout:
 28  bit<32> reserved
 ```
 
-`pilot_wire.p4` currently parses Ethernet plus the Pilot header, marks switch-request packets, and forwards by `receiver_rank`.
+`pilot_wire.p4` currently parses Ethernet plus the Pilot header, marks switch-request packets, forwards by `receiver_rank`, and has a limited BMv2 data-plane BMT append prototype.
 
-The current P4 program does not yet append BMT trailers. The next BMv2 step is to add a BMT data source, either with registers populated by the control plane or a BMv2 extern. The C++ switch remains the reference behavior for `InPathSwitchSimulator::forwardRequest()`.
+The current P4 program can transform bounded request shapes into an envelope:
+
+```text
+payload_size in {1,2,4,8,16,32} words
+bmt_count in {4,16} triples
+```
+
+The BMT source is selected by the control plane through `p4/bmt_zero.cli`. It currently emits all-zero triples for functional validation only; this is not a secure BMT source.
 
 Example BMv2 flow:
 
@@ -56,6 +63,7 @@ the CLI commands are in `p4/rank_forwarding.cli`:
 
 ```bash
 simple_switch_CLI < p4/rank_forwarding.cli
+simple_switch_CLI < p4/bmt_zero.cli
 ```
 
 ## Current BMv2 Status
@@ -66,10 +74,20 @@ Verified on `ppdsa-a6000.luddy.indiana.edu` with `p4lang/p4c:latest`:
 p4c compilation: PASS
 BMv2 rank_forward table programming: PASS
 Pilot TAP path through BMv2 forwarding: starts and forwards Pilot packets
-Full BMT sort with rows=8: FAILS/TIMES OUT
+Limited BMv2 BMT append for payload_size=1,bmt_count=4: PASS with rows=1,bundle=4
+Bounded BMv2 BMT append for payload_size<=32,bmt_count=4: PASS with rows=8,bundle=4
+Bounded BMv2 BMT append for payload_size<=32,bmt_count=16: PASS with rows=8,bundle=16
+Bounded BMv2 BMT append with two lanes: PASS with rows=8,bundle=16,parallelism=2
 ```
 
-The failure is expected at this stage. BMv2 currently forwards packets whose `flags` contain `PILOT_FLAG_SWITCH_REQUEST`, but it does not transform the request into a Pilot envelope and does not append BMT trailer words. The receiver therefore sees a request where it expects an envelope and logs:
+The bounded P4 prototype transforms only switch requests with:
+
+```text
+payload_size in {1,2,4,8,16,32}
+bmt_count in {4,16}
+```
+
+Requests outside those shapes are forwarded without transformation, so the receiver sees a request where it expects an envelope and logs:
 
 ```text
 Invalid pilot envelope packet.
@@ -81,10 +99,10 @@ The C++ `pilot_tap_switch` remains the reference full switch implementation beca
 InPathSwitchSimulator::forwardRequest()
 ```
 
-To make BMv2 a complete replacement, the P4/BMv2 path needs a BMT data source and packet rewrite path. Practical options are:
+To make BMv2 a complete replacement, the P4/BMv2 path needs to generalize this fixed-shape prototype. Practical options are:
 
 ```text
-1. P4 registers populated by the control plane with pre-generated BMT shares.
+1. P4 registers/tables populated by the control plane with pre-generated BMT shares.
 2. A BMv2 extern that implements the reference BMT append behavior.
 3. A hybrid controller path that intercepts switch-request packets and reinjects envelope packets.
 ```

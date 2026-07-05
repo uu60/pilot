@@ -1,0 +1,2 @@
+table_add bmt_source set_zero_bmt4 4 =>
+table_add bmt_source set_zero_bmt16 16 =>
