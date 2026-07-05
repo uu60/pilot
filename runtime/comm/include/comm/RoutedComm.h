@@ -3,7 +3,6 @@
 
 #include "comm/Comm.h"
 #include "comm/transport/peer/RoutedPeerTransport.h"
-#include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
 
 #include <condition_variable>
 #include <deque>
@@ -98,12 +97,6 @@ private:
 
     void sendWordsToRank(int receiverRank, int senderRank, int tag, int type,
                          const std::vector<int64_t> &words, const std::string &text);
-
-    static void routeSend(int physicalTag, const std::vector<int64_t> &request);
-
-    static std::vector<int64_t> routeReceive(int physicalTag);
-
-    static TcpSoftwareSwitchTransport &routeTransport();
 
     int _rank = 0;
     std::unique_ptr<RoutedPeerTransport> _peerTransport;

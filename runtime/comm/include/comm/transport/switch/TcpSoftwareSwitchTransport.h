@@ -1,39 +1,29 @@
 #ifndef PILOT_TCP_SOFTWARE_SWITCH_TRANSPORT_H
 #define PILOT_TCP_SOFTWARE_SWITCH_TRANSPORT_H
 
-#include "comm/transport/switch/SwitchFrameTransport.h"
+#include "comm/transport/peer/RoutedPeerTransport.h"
 
-#include <condition_variable>
-#include <deque>
-#include <map>
 #include <mutex>
 #include <thread>
 
-class TcpSoftwareSwitchTransport final : public SwitchFrameTransport {
+class TcpSoftwareSwitchTransport final : public RoutedPeerTransport {
 public:
-    void send(const PilotFrame &frame) override;
+    void init(int rank, MessageHandler handler) override;
 
-    PilotFrame receive(int physicalTag) override;
+    void send(const RoutedPeerMessage &message) override;
 
     void finalize() override;
 
     static void runSwitch();
 
 private:
-    void ensureClientConnected();
-
     void receiveLoop();
 
-    static void sendFrame(int fd, const PilotFrame &frame);
-
-    static bool receiveFrame(int fd, PilotFrame &frame);
-
-    std::mutex _mutex;
-    std::condition_variable _cv;
-    std::map<int, std::deque<PilotFrame>> _pending;
-    std::thread _receiveThread;
+    int _rank = 0;
     int _socketFd = -1;
-    bool _connected = false;
+    MessageHandler _handler;
+    std::mutex _sendMutex;
+    std::thread _receiveThread;
     bool _finalized = false;
 };
 

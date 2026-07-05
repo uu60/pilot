@@ -3,7 +3,6 @@
 #include "comm/InPathSwitchSimulator.h"
 #include "comm/item/FutureRequestWrapper.h"
 #include "comm/transport/peer/TapRoutedPeerTransport.h"
-#include "comm/transport/peer/TcpRoutedPeerTransport.h"
 #include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
@@ -33,8 +32,8 @@ void validateRoutedNetworkMode() {
         if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
             throw std::runtime_error(
                 "Simulator-level routed mode cannot use routed_network=tcp. "
-                "TCP connects directly to the peer process, so an external L2 switch simulator cannot transparently "
-                "append BMT. Use --routed_network=tap after the TAP backend and OS bridge are configured.");
+                "The TCP backend is the built-in software switch baseline, not an external transparent L2 simulator. "
+                "Use --routed_network=tap after the TAP backend and OS bridge are configured.");
         }
         return;
     }
@@ -46,7 +45,7 @@ void validateRoutedNetworkMode() {
 
 std::unique_ptr<RoutedPeerTransport> makePeerTransport() {
     if (Conf::ROUTED_NETWORK == Conf::ROUTED_NETWORK_TCP) {
-        return std::make_unique<TcpRoutedPeerTransport>();
+        return std::make_unique<TcpSoftwareSwitchTransport>();
     }
     return std::make_unique<TapRoutedPeerTransport>();
 }
@@ -78,14 +77,8 @@ void RoutedComm::runSwitch() {
 }
 
 void RoutedComm::sendShutdown() {
-    if (!Comm::isServerRank(Comm::rank())) {
-        return;
-    }
-    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-        return;
-    }
-    std::vector<int64_t> stop{InPathSwitchSimulator::SHUTDOWN_MAGIC};
-    routeTransport().send(PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, InPathSwitchSimulator::CONTROL_TAG, stop});
+    // Routed software mode now closes persistent rank-to-switch connections during Comm::finalize().
+    // The software switch exits after all rank sockets close, so no explicit shutdown frame is needed.
 }
 
 int RoutedComm::rank_() {
@@ -97,6 +90,9 @@ void RoutedComm::init_(int argc, char **argv) {
     (void) argv;
     validateRoutedNetworkMode();
     _rank = Conf::ROUTED_RANK;
+    if (_rank == Conf::IN_PATH_SWITCH_RANK && Conf::SIMULATION_LEVEL == Conf::SIMULATION_SOFTWARE) {
+        return;
+    }
     _peerTransport = makePeerTransport();
     _peerTransport->init(_rank, [this](RoutedPeerMessage message) {
         Message queued;
@@ -107,9 +103,6 @@ void RoutedComm::init_(int argc, char **argv) {
 }
 
 void RoutedComm::finalize_() {
-    if (Comm::isServerRank(_rank) && Conf::SIMULATION_LEVEL != Conf::SIMULATION_SIMULATOR) {
-        routeTransport().finalize();
-    }
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_finalized) {
@@ -215,11 +208,7 @@ void RoutedComm::serverSendImpl_(const int64_t &source, int width, int tag) {
     auto request = InPathSwitchSimulator::makeSwitchRequest(
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
     const int physicalTag = inPathPhysicalTag();
-    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-        sendWordsToRank(::serverPeerRank(_rank), _rank, physicalTag, VECTOR_MESSAGE, request, {});
-        return;
-    }
-    routeSend(physicalTag, request);
+    sendWordsToRank(::serverPeerRank(_rank), _rank, physicalTag, VECTOR_MESSAGE, request, {});
 }
 
 void RoutedComm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
@@ -230,11 +219,7 @@ void RoutedComm::serverSendImpl_(const std::vector<int64_t> &source, int width, 
     auto request = InPathSwitchSimulator::makeSwitchRequest(
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
     const int physicalTag = inPathPhysicalTag();
-    if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-        sendWordsToRank(::serverPeerRank(_rank), _rank, physicalTag, VECTOR_MESSAGE, request, {});
-        return;
-    }
-    routeSend(physicalTag, request);
+    sendWordsToRank(::serverPeerRank(_rank), _rank, physicalTag, VECTOR_MESSAGE, request, {});
 }
 
 void RoutedComm::serverReceiveImpl_(int64_t &source, int width, int tag) {
@@ -243,9 +228,7 @@ void RoutedComm::serverReceiveImpl_(int64_t &source, int width, int tag) {
         return;
     }
     const int physicalTag = inPathPhysicalTag();
-    const auto envelope = Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR
-                              ? waitMessage(::serverPeerRank(_rank), physicalTag, VECTOR_MESSAGE).words
-                              : routeReceive(physicalTag);
+    const auto envelope = waitMessage(::serverPeerRank(_rank), physicalTag, VECTOR_MESSAGE).words;
     auto payload = InPathSwitchSimulator::unpackPayload(envelope);
     if (payload.empty()) {
         throw std::runtime_error("Missing scalar payload in routed switch envelope.");
@@ -259,9 +242,7 @@ void RoutedComm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int
         return;
     }
     const int physicalTag = inPathPhysicalTag();
-    const auto envelope = Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR
-                              ? waitMessage(::serverPeerRank(_rank), physicalTag, VECTOR_MESSAGE).words
-                              : routeReceive(physicalTag);
+    const auto envelope = waitMessage(::serverPeerRank(_rank), physicalTag, VECTOR_MESSAGE).words;
     source = InPathSwitchSimulator::unpackPayload(envelope);
 }
 
@@ -275,11 +256,7 @@ AbstractRequest *RoutedComm::serverSendAsyncImpl_(const int64_t &source, int wid
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
     const int peerRank = ::serverPeerRank(_rank);
     return new FutureRequestWrapper(std::async(std::launch::async, [this, physicalTag, peerRank, request = std::move(request)]() {
-        if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-            sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
-            return;
-        }
-        routeSend(physicalTag, request);
+        sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
     }));
 }
 
@@ -292,11 +269,7 @@ AbstractRequest *RoutedComm::serverSendAsyncImpl_(const std::vector<int64_t> &so
         tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
     const int peerRank = ::serverPeerRank(_rank);
     return new FutureRequestWrapper(std::async(std::launch::async, [this, physicalTag, peerRank, request = std::move(request)]() {
-        if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
-            sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
-            return;
-        }
-        routeSend(physicalTag, request);
+        sendWordsToRank(peerRank, Comm::rank(), physicalTag, VECTOR_MESSAGE, request, {});
     }));
 }
 
@@ -307,9 +280,7 @@ AbstractRequest *RoutedComm::serverReceiveAsyncImpl_(int64_t &target, int width,
     const int physicalTag = inPathPhysicalTag();
     const int peerRank = ::serverPeerRank(_rank);
     return new FutureRequestWrapper(std::async(std::launch::async, [&target, physicalTag, peerRank, this]() {
-        const auto envelope = Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR
-                                  ? waitMessage(peerRank, physicalTag, VECTOR_MESSAGE).words
-                                  : routeReceive(physicalTag);
+        const auto envelope = waitMessage(peerRank, physicalTag, VECTOR_MESSAGE).words;
         auto payload = InPathSwitchSimulator::unpackPayload(envelope);
         if (payload.empty()) {
             throw std::runtime_error("Missing scalar payload in routed switch envelope.");
@@ -325,9 +296,7 @@ AbstractRequest *RoutedComm::serverReceiveAsyncImpl_(std::vector<int64_t> &targe
     const int physicalTag = inPathPhysicalTag();
     const int peerRank = ::serverPeerRank(_rank);
     return new FutureRequestWrapper(std::async(std::launch::async, [&target, count, physicalTag, peerRank, this]() {
-        const auto envelope = Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR
-                                  ? waitMessage(peerRank, physicalTag, VECTOR_MESSAGE).words
-                                  : routeReceive(physicalTag);
+        const auto envelope = waitMessage(peerRank, physicalTag, VECTOR_MESSAGE).words;
         target = InPathSwitchSimulator::unpackPayload(envelope);
         if (count >= 0 && static_cast<int>(target.size()) > count) {
             target.resize(count);
@@ -358,17 +327,4 @@ void RoutedComm::sendWordsToRank(int receiverRank, int senderRank, int tag, int 
         throw std::runtime_error("Routed peer transport is not initialized.");
     }
     _peerTransport->send(RoutedPeerMessage{senderRank, receiverRank, tag, type, words, text});
-}
-
-void RoutedComm::routeSend(int physicalTag, const std::vector<int64_t> &request) {
-    routeTransport().send(PilotFrame{Comm::rank(), Conf::IN_PATH_SWITCH_RANK, physicalTag, request});
-}
-
-std::vector<int64_t> RoutedComm::routeReceive(int physicalTag) {
-    return routeTransport().receive(physicalTag).words;
-}
-
-TcpSoftwareSwitchTransport &RoutedComm::routeTransport() {
-    static TcpSoftwareSwitchTransport transport;
-    return transport;
 }
