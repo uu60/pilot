@@ -3,9 +3,11 @@
 #include "comm/Comm.h"
 #include "comm/InPathSwitchSimulator.h"
 #include "comm/protocol/PilotPacket.h"
+#include "comm/protocol/PilotWireMessageCodec.h"
 #include "conf/Conf.h"
 #include "utils/Log.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -18,12 +20,12 @@
 #include <thread>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace {
 constexpr int kListenBacklog = 16;
 constexpr int kControlMessage = 0;
 constexpr int kVectorMessage = 2;
-constexpr int kStringMessage = 3;
 constexpr int64_t kHelloTag = -1;
 
 void closeFd(int &fd) {
@@ -125,47 +127,27 @@ int createServerSocket() {
 }
 
 void sendMessage(int fd, const RoutedPeerMessage &message) {
-    const int64_t size = message.type == kStringMessage ? static_cast<int64_t>(message.text.size())
-                                                        : static_cast<int64_t>(message.words.size());
-    const int64_t header[5]{
-        static_cast<int64_t>(message.senderRank),
-        static_cast<int64_t>(message.receiverRank),
-        static_cast<int64_t>(message.tag),
-        static_cast<int64_t>(message.type),
-        size
-    };
-    writeAll(fd, header, sizeof(header));
-    if (message.type == kStringMessage && !message.text.empty()) {
-        writeAll(fd, message.text.data(), message.text.size());
-    } else if (message.type != kStringMessage && !message.words.empty()) {
-        writeAll(fd, message.words.data(), message.words.size() * sizeof(int64_t));
-    }
+    const auto bytes = PilotWireMessageCodec::encode(message);
+    writeAll(fd, bytes.data(), bytes.size());
 }
 
 bool receiveMessage(int fd, RoutedPeerMessage &message) {
-    int64_t header[5]{};
-    if (!readAll(fd, header, sizeof(header))) {
+    std::array<uint8_t, PilotWireMessageCodec::HEADER_SIZE> header{};
+    if (!readAll(fd, header.data(), header.size())) {
         return false;
     }
-    if (header[4] < 0) {
-        throw std::runtime_error("Invalid TCP software switch message size.");
+    size_t payloadBytes = 0;
+    if (!PilotWireMessageCodec::payloadBytesFromHeader(header.data(), header.size(), payloadBytes)) {
+        throw std::runtime_error("Invalid TCP software switch wire header.");
     }
 
-    message.senderRank = static_cast<int>(header[0]);
-    message.receiverRank = static_cast<int>(header[1]);
-    message.tag = static_cast<int>(header[2]);
-    message.type = static_cast<int>(header[3]);
-    const auto size = static_cast<size_t>(header[4]);
-    message.words.clear();
-    message.text.clear();
-
-    if (message.type == kStringMessage) {
-        message.text.resize(size);
-        return size == 0 || readAll(fd, message.text.data(), size);
+    std::vector<uint8_t> bytes;
+    bytes.resize(PilotWireMessageCodec::HEADER_SIZE + payloadBytes);
+    std::copy(header.begin(), header.end(), bytes.begin());
+    if (payloadBytes > 0 && !readAll(fd, bytes.data() + PilotWireMessageCodec::HEADER_SIZE, payloadBytes)) {
+        return false;
     }
-
-    message.words.resize(size);
-    return size == 0 || readAll(fd, message.words.data(), size * sizeof(int64_t));
+    return PilotWireMessageCodec::decode(bytes.data(), bytes.size(), message);
 }
 
 RoutedPeerMessage makeHello(int rank) {
