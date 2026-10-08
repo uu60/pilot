@@ -120,35 +120,3 @@ pilot_pkg  (package: constants, header layout)     pilot_pkg.sv
 Also: parse-time `MAX_PAYLOAD_WORDS` reject; `pilot_pkg` functions inlined
 at their call sites (Yosys workaround).
 
-## Known issues (open)
-
-- **Seed quality is the integrator's job.** The gate guarantees no triple is
-  produced before a nonzero seed arrives and that the seed cannot be replaced
-  without a reset. It cannot tell a fresh seed from a repeated one: feed it
-  from a hardware entropy source on every boot, never a constant.
-- **Drop counters are not visible.** `oversize_drops`, `runt_drops` and
-  `unprovisioned_drops`, `auth_drops`, `replay_drops` are internal only and are removed by synthesis. Expose them or delete them.
-- **`prng_xoshiro256pp` is a stand-in** for a real entropy source and is not
-  cryptographically secure.
-
-## Verification status (summary)
-
-Formal proofs and mutation campaigns live in `formal/`, `mcy_switch/` and
-`mcy_switch_buf/`.
-
-- `prng_xoshiro256pp`: proven (unbounded, k-induction) against a reference
-  model of xoshiro256++ -- reset value, seed load, state update, output
-  function, hold, and no all-zero state after a nonzero seed (`prng.sby`).
-- `bmt_pregen` seed gate: `bmt_seed.sby` -- nothing drawn, encrypted or pushed
-  before seeding; zero seed rejected; one seed per reset; `seeded` sticky.
-- `pilot_switch_top`: the 2026-10-07 seed-gate change (zero seed ignored,
-  one seed per reset, `SEED_GATE=0` loads a default seed) has been checked
-  only with a small bounded check of the gate; the full property sweep with
-  your HMAC property files is still to be rerun on this version.
-- `pilot_hmac` + `sha256_core`: known-answer simulation against Python
-  `hmac` passes 11/11 (RFC 4231 case 2, and random 32-byte keys with message
-  lengths 0, 1, 47, 55, 56, 63, 64, 119, 120, 200 bytes).
-- Full design (all 13 files, real HMAC) elaborates with Yosys
-  `check -assert`: 0 problems.
-- `aes_gcm_encrypt_24b` is proven with its datapath abstracted; a known-answer
-  simulation is still to do.
