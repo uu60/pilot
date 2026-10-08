@@ -29,9 +29,14 @@ module bmt_pregen #(
     input  wire [127:0] key_s0,    // encryption key for server 0's shares
     input  wire [127:0] key_s1,    // encryption key for server 1's shares
 
-    // PRNG seed (optional)
+    // PRNG seed -- REQUIRED once per reset before any triple is generated.
+    //   The first seed_valid with nonzero seed_data after reset loads the
+    //   PRNG and raises `seeded`; every later seed_valid is ignored until the
+    //   next reset. An all-zero seed is ignored (all-zero is a fixed point of
+    //   xoshiro256++: every draw would be 0).
     input  wire         seed_valid,
     input  wire [255:0] seed_data,
+    output wire         seeded,
 
     // FIFO status
     output wire [$clog2(FIFO_DEPTH):0] fifo_count_s0,
@@ -63,10 +68,29 @@ module bmt_pregen #(
     reg         prng_advance;
     wire [63:0] prng_out;
 
+    // SEED GATE.
+    //
+    // The PRNG resets to fixed constants and the AES keys are fixed, so
+    // without a fresh seed every reset would regenerate the same triples and
+    // the same GCM IVs under the same keys: nonce reuse across boots, and
+    // triple reuse across sessions. Generation is therefore held in G_IDLE
+    // until a seed has been loaded.
+    //
+    // Exactly one load per reset. A seed_valid held high, or pulsed again
+    // mid-triple, would otherwise reload the PRNG while draws are being
+    // taken and hand out the same value more than once.
+    reg  seeded_r;
+    wire prng_seed_load = seed_valid && (seed_data != 256'b0) && !seeded_r;
+    assign seeded = seeded_r;
+
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n)              seeded_r <= 1'b0;
+        else if (prng_seed_load) seeded_r <= 1'b1;
+
     prng_xoshiro256pp u_prng (
         .clk       (clk),
         .rst_n     (rst_n),
-        .seed_valid(seed_valid),
+        .seed_valid(prng_seed_load),
         .seed_data (seed_data),
         .advance   (prng_advance),
         .rnd_out   (prng_out)
@@ -226,7 +250,7 @@ module bmt_pregen #(
 
             // =================================================================
             G_IDLE: begin
-                if (!any_full)
+                if (seeded_r && !any_full)
                     gen_state <= G_DRAW_A;
             end
 

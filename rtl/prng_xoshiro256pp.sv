@@ -63,4 +63,11 @@ module prng_xoshiro256pp (
         end
     end
 
+// Formal properties (prng.sby only). Uses its own define, not FORMAL, so the
+// flows that read this file with -formal (bmt_pregen realaes, the switch)
+// are unaffected.
+`ifdef PRNG_PROPS
+`include "prng_xoshiro256pp_props_inst.vh"
+`endif
+
 endmodule
