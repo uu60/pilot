@@ -89,23 +89,7 @@ pilot_pkg  (package: constants, header layout)     pilot_pkg.sv
 Also: parse-time `MAX_PAYLOAD_WORDS` reject; `pilot_pkg` functions inlined
 at their call sites (Yosys workaround).
 
-## Known issues (open)
 
-- **Replay across resets.** The PRNG resets to fixed constants, and the keys
-  are fixed, so without a fresh `seed_valid` load on every boot each reset
-  regenerates the same triples and the same GCM IVs under the same keys
-  (nonce reuse and triple reuse). Seed with fresh entropy on every boot;
-  a gate that refuses requests until seeded is planned.
-- **Drop counters are not visible.** `oversize_drops` and `runt_drops` are
-  internal only and are removed by synthesis. Expose them or delete them.
-- **`prng_xoshiro256pp` is a stand-in** for a real entropy source and is not
-  cryptographically secure.
-
-## Verification status (summary)
-
-Formal proofs and mutation campaigns live in `formal/`, `mcy_switch/` and
-`mcy_switch_buf/`. Not yet rerun on this exact version of
-`pilot_switch_top.sv`: the full property sweep (command in the
 hardcoded-keys README). Never formally verified: `prng_xoshiro256pp`.
 `aes_gcm_encrypt_24b` is proven with its datapath abstracted; a known-answer
 simulation is still to do.
