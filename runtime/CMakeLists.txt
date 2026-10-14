@@ -13,4 +13,14 @@ target_include_directories(pilot_runtime PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/parallel/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/system/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/utils/include")
-target_link_libraries(pilot_runtime PUBLIC MPI::MPI_CXX)
+target_link_libraries(pilot_runtime PUBLIC MPI::MPI_CXX OpenSSL::Crypto)
+
+if(BUILD_TESTING)
+    add_executable(pilot_bmt_crypto_test test/BmtCryptoTest.cpp)
+    target_link_libraries(pilot_bmt_crypto_test PRIVATE pilot_runtime)
+    add_test(NAME pilot_bmt_crypto_test COMMAND pilot_bmt_crypto_test)
+
+    add_executable(pilot_wire_codec_test test/WireCodecTest.cpp)
+    target_link_libraries(pilot_wire_codec_test PRIVATE pilot_runtime)
+    add_test(NAME pilot_wire_codec_test COMMAND pilot_wire_codec_test)
+endif()

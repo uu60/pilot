@@ -96,7 +96,7 @@ Invalid pilot envelope packet.
 The C++ `pilot_tap_switch` remains the reference full switch implementation because it calls:
 
 ```text
-InPathSwitchSimulator::forwardRequest()
+SoftwareBmtEngine::processRequest()
 ```
 
 To make BMv2 a complete replacement, the P4/BMv2 path needs to generalize this fixed-shape prototype. Practical options are:

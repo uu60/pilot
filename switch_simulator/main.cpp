@@ -1,8 +1,8 @@
 #include "comm/Comm.h"
-#include "comm/InPathSwitchSimulator.h"
 #include "comm/protocol/PilotPacket.h"
-#include "comm/transport/peer/RoutedPeerTransport.h"
-#include "comm/transport/peer/TapFrameCodec.h"
+#include "comm/protocol/EthernetFrameCodec.h"
+#include "comm/protocol/PilotMessage.h"
+#include "comm/switch/SoftwareBmtEngine.h"
 #include "utils/Log.h"
 
 #include <algorithm>
@@ -49,7 +49,7 @@ int peerServerRank(int rank) {
     return rank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
 }
 
-bool isServerSwitchRequest(const RoutedPeerMessage &message) {
+bool isServerSwitchRequest(const PilotMessage &message) {
     return isServerRank(message.senderRank) &&
            isServerRank(message.receiverRank) &&
            message.type == 2 &&
@@ -57,10 +57,10 @@ bool isServerSwitchRequest(const RoutedPeerMessage &message) {
            message.words[0] == PilotPacket::REQUEST_MAGIC;
 }
 
-RoutedPeerMessage transformServerRequest(const RoutedPeerMessage &message) {
-    RoutedPeerMessage out = message;
+PilotMessage transformServerRequest(const PilotMessage &message) {
+    PilotMessage out = message;
     out.receiverRank = peerServerRank(message.senderRank);
-    out.words = InPathSwitchSimulator::forwardRequest(message.senderRank, message.tag, message.words);
+    out.words = SoftwareBmtEngine::processRequest(message.senderRank, message.tag, message.words);
     return out;
 }
 
@@ -106,13 +106,13 @@ void closeFd(int &fd) {
     }
 }
 
-void sendFrame(int fd, const RoutedPeerMessage &message, const std::string &interfaceName) {
-    auto frame = TapFrameCodec::encode(message);
-    const auto dst = TapFrameCodec::macForRank(message.receiverRank);
+void sendFrame(int fd, const PilotMessage &message, const std::string &interfaceName) {
+    auto frame = EthernetFrameCodec::encode(message);
+    const auto dst = EthernetFrameCodec::macForRank(message.receiverRank);
 
     sockaddr_ll address{};
     address.sll_family = AF_PACKET;
-    address.sll_protocol = htons(TapFrameCodec::ETHERTYPE);
+    address.sll_protocol = htons(EthernetFrameCodec::ETHERTYPE);
     address.sll_ifindex = static_cast<int>(if_nametoindex(interfaceName.c_str()));
     address.sll_halen = static_cast<unsigned char>(dst.size());
     std::memcpy(address.sll_addr, dst.data(), dst.size());
@@ -182,8 +182,8 @@ void runSwitch(std::array<Port, 3> &ports) {
                 continue;
             }
 
-            RoutedPeerMessage message;
-            if (!TapFrameCodec::decode(buffer.data(), static_cast<size_t>(readBytes), message)) {
+            PilotMessage message;
+            if (!EthernetFrameCodec::decode(buffer.data(), static_cast<size_t>(readBytes), message)) {
                 continue;
             }
             if (tapDebugEnabled()) {
@@ -197,7 +197,7 @@ void runSwitch(std::array<Port, 3> &ports) {
                 continue;
             }
 
-            RoutedPeerMessage out = isServerSwitchRequest(message) ? transformServerRequest(message) : message;
+            PilotMessage out = isServerSwitchRequest(message) ? transformServerRequest(message) : message;
             sendFrame(fdByRank[static_cast<size_t>(out.receiverRank)], out,
                       interfaceByRank[static_cast<size_t>(out.receiverRank)]);
         }

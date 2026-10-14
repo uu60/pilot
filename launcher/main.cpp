@@ -47,16 +47,10 @@ int getIntArg(int argc, char **argv, const std::string &name, int fallback) {
 std::vector<std::string> makeArgs(int argc, char **argv, const std::string &program, const std::string &role) {
     std::vector<std::string> args;
     args.push_back(program);
-    args.push_back("--comm=routed");
+    args.push_back(isSimulatorMode(argc, argv) ? "--comm=l2" : "--comm=tcp");
     args.push_back("--role=" + role);
-    if (!hasArg(argc, argv, "server_transport")) {
-        args.push_back("--server_transport=tcp");
-    }
     if (!hasArg(argc, argv, "simulation_level")) {
         args.push_back("--simulation_level=software");
-    }
-    if (!hasArg(argc, argv, "routed_network")) {
-        args.push_back(isSimulatorMode(argc, argv) ? "--routed_network=tap" : "--routed_network=tcp");
     }
 
     for (int i = 1; i < argc; ++i) {

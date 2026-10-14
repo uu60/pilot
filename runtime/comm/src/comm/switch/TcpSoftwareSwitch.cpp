@@ -1,16 +1,16 @@
-#include "comm/transport/switch/TcpSoftwareSwitchTransport.h"
+#include "comm/switch/TcpSoftwareSwitch.h"
 
 #include "comm/Comm.h"
-#include "comm/InPathSwitchSimulator.h"
+#include "comm/protocol/PilotMessage.h"
 #include "comm/protocol/PilotPacket.h"
 #include "comm/protocol/PilotWireMessageCodec.h"
+#include "comm/switch/SoftwareBmtEngine.h"
 #include "conf/Conf.h"
 #include "utils/Log.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
-#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <netinet/in.h>
@@ -19,7 +19,6 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -73,41 +72,11 @@ bool readAll(int fd, void *data, size_t bytes) {
     return true;
 }
 
-int createClientSocket() {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        throwSystemError("TCP software switch client socket creation failed");
-    }
-
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<uint16_t>(Conf::TCP_SWITCH_PORT));
-
-    for (int attempt = 0; attempt < 300; ++attempt) {
-        if (connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0) {
-            return fd;
-        }
-        if (errno == EISCONN) {
-            return fd;
-        }
-        if (errno != ECONNREFUSED && errno != ENOENT) {
-            close(fd);
-            throwSystemError("TCP software switch connect failed");
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    close(fd);
-    throw std::runtime_error("Timed out connecting to TCP software switch.");
-}
-
 int createServerSocket() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         throwSystemError("TCP software switch server socket creation failed");
     }
-
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -126,12 +95,12 @@ int createServerSocket() {
     return fd;
 }
 
-void sendMessage(int fd, const RoutedPeerMessage &message) {
+void sendMessage(int fd, const PilotMessage &message) {
     const auto bytes = PilotWireMessageCodec::encode(message);
     writeAll(fd, bytes.data(), bytes.size());
 }
 
-bool receiveMessage(int fd, RoutedPeerMessage &message) {
+bool receiveMessage(int fd, PilotMessage &message) {
     std::array<uint8_t, PilotWireMessageCodec::HEADER_SIZE> header{};
     if (!readAll(fd, header.data(), header.size())) {
         return false;
@@ -140,29 +109,20 @@ bool receiveMessage(int fd, RoutedPeerMessage &message) {
     if (!PilotWireMessageCodec::payloadBytesFromHeader(header.data(), header.size(), payloadBytes)) {
         throw std::runtime_error("Invalid TCP software switch wire header.");
     }
-
-    std::vector<uint8_t> bytes;
-    bytes.resize(PilotWireMessageCodec::HEADER_SIZE + payloadBytes);
+    std::vector<uint8_t> bytes(PilotWireMessageCodec::HEADER_SIZE + payloadBytes);
     std::copy(header.begin(), header.end(), bytes.begin());
-    if (payloadBytes > 0 && !readAll(fd, bytes.data() + PilotWireMessageCodec::HEADER_SIZE, payloadBytes)) {
+    if (payloadBytes > 0 &&
+        !readAll(fd, bytes.data() + PilotWireMessageCodec::HEADER_SIZE, payloadBytes)) {
         return false;
     }
     return PilotWireMessageCodec::decode(bytes.data(), bytes.size(), message);
-}
-
-RoutedPeerMessage makeHello(int rank) {
-    return RoutedPeerMessage{rank, Conf::IN_PATH_SWITCH_RANK, static_cast<int>(kHelloTag), kControlMessage, {}, {}};
 }
 
 bool isValidPilotRank(int rank) {
     return rank == Comm::SERVER0_RANK || rank == Comm::SERVER1_RANK || rank == Comm::CLIENT_RANK;
 }
 
-int peerServerRank(int rank) {
-    return rank == Comm::SERVER0_RANK ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
-}
-
-bool isServerSwitchRequest(const RoutedPeerMessage &message) {
+bool isServerSwitchRequest(const PilotMessage &message) {
     return Comm::isServerRank(message.senderRank) &&
            Comm::isServerRank(message.receiverRank) &&
            message.type == kVectorMessage &&
@@ -170,62 +130,16 @@ bool isServerSwitchRequest(const RoutedPeerMessage &message) {
            message.words[0] == PilotPacket::REQUEST_MAGIC;
 }
 
-RoutedPeerMessage maybeAppendBmt(const RoutedPeerMessage &message) {
-    if (!isServerSwitchRequest(message)) {
-        return message;
-    }
-    RoutedPeerMessage out = message;
-    out.receiverRank = peerServerRank(message.senderRank);
-    out.words = InPathSwitchSimulator::forwardRequest(message.senderRank, message.tag, message.words);
+PilotMessage transformServerRequest(const PilotMessage &message) {
+    PilotMessage out = message;
+    out.receiverRank = message.senderRank == Comm::SERVER0_RANK
+                           ? Comm::SERVER1_RANK : Comm::SERVER0_RANK;
+    out.words = SoftwareBmtEngine::processRequest(message.senderRank, message.tag, message.words);
     return out;
 }
 }
 
-void TcpSoftwareSwitchTransport::init(int rank, MessageHandler handler) {
-    _rank = rank;
-    _handler = std::move(handler);
-    _socketFd = createClientSocket();
-    sendMessage(_socketFd, makeHello(_rank));
-    _receiveThread = std::thread(&TcpSoftwareSwitchTransport::receiveLoop, this);
-}
-
-void TcpSoftwareSwitchTransport::send(const RoutedPeerMessage &message) {
-    if (_socketFd < 0) {
-        throw std::runtime_error("TCP software switch transport is not initialized.");
-    }
-    std::lock_guard<std::mutex> lock(_sendMutex);
-    sendMessage(_socketFd, message);
-}
-
-void TcpSoftwareSwitchTransport::finalize() {
-    if (_finalized) {
-        return;
-    }
-    _finalized = true;
-    if (_socketFd >= 0) {
-        shutdown(_socketFd, SHUT_RDWR);
-    }
-    closeFd(_socketFd);
-    if (_receiveThread.joinable()) {
-        _receiveThread.join();
-    }
-}
-
-void TcpSoftwareSwitchTransport::receiveLoop() {
-    try {
-        while (!_finalized) {
-            RoutedPeerMessage message;
-            if (!receiveMessage(_socketFd, message)) {
-                return;
-            }
-            _handler(std::move(message));
-        }
-    } catch (...) {
-        // The owning Comm instance closes the socket during finalization to unblock this loop.
-    }
-}
-
-void TcpSoftwareSwitchTransport::runSwitch() {
+void TcpSoftwareSwitch::run() {
     Log::i("TCP in-path BMT software switch started.");
     int listenFd = createServerSocket();
     std::array<int, 3> fdByRank{-1, -1, -1};
@@ -240,8 +154,7 @@ void TcpSoftwareSwitchTransport::runSwitch() {
             closeFd(listenFd);
             throwSystemError("TCP software switch accept failed");
         }
-
-        RoutedPeerMessage hello;
+        PilotMessage hello;
         if (!receiveMessage(fd, hello) || hello.type != kControlMessage || hello.tag != kHelloTag ||
             !isValidPilotRank(hello.senderRank)) {
             close(fd);
@@ -254,11 +167,11 @@ void TcpSoftwareSwitchTransport::runSwitch() {
     auto worker = [&](int srcRank) {
         try {
             while (true) {
-                RoutedPeerMessage message;
+                PilotMessage message;
                 if (!receiveMessage(fdByRank[static_cast<size_t>(srcRank)], message)) {
                     break;
                 }
-                auto out = maybeAppendBmt(message);
+                auto out = isServerSwitchRequest(message) ? transformServerRequest(message) : message;
                 if (!isValidPilotRank(out.receiverRank)) {
                     continue;
                 }
@@ -266,7 +179,7 @@ void TcpSoftwareSwitchTransport::runSwitch() {
                 sendMessage(fdByRank[static_cast<size_t>(out.receiverRank)], out);
             }
         } catch (...) {
-            // A peer may close while another worker is forwarding during shutdown.
+            // Peers may close while another worker is forwarding during shutdown.
         }
     };
 

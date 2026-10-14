@@ -5,10 +5,11 @@
 
 #include <vector>
 
-#include "comm/InPathSwitchSimulator.h"
+#include "comm/L2Comm.h"
 #include "comm/MpiComm.h"
-#include "comm/RoutedComm.h"
+#include "comm/TcpComm.h"
 #include "comm/item/FutureRequestWrapper.h"
+#include "comm/protocol/InPathBmtProtocol.h"
 #include "conf/Conf.h"
 #include "intermediate/IntermediateDataSupport.h"
 #include "parallel/LaneThreadPool.h"
@@ -51,15 +52,17 @@ void Comm::init(int argc, char **argv) {
         if (Conf::SIMULATION_LEVEL == Conf::SIMULATION_SIMULATOR) {
             Log::e(
                 "OpenMPI communication is disabled for simulator-level switch mode. "
-                "Use --comm=routed and put the external switch simulator in the network path.");
+                "Use --comm=l2 and put the external switch simulator in the network path.");
             LaneThreadPool::finalize();
             std::exit(EXIT_FAILURE);
         }
         impl = new MpiComm();
-    } else if (Conf::COMM_TYPE == Conf::ROUTED) {
-        impl = new RoutedComm();
+    } else if (Conf::COMM_TYPE == Conf::TCP) {
+        impl = new TcpComm();
+    } else if (Conf::COMM_TYPE == Conf::L2) {
+        impl = new L2Comm();
     } else {
-        throw std::runtime_error("Pilot only supports MPI or routed communication.");
+        throw std::runtime_error("Pilot only supports MPI, TCP, or L2 communication.");
     }
     impl->init_(argc, argv);
 }
@@ -132,10 +135,10 @@ void Comm::serverReceive(std::vector<int64_t> &source, int width) {
 }
 
 void Comm::serverSendImpl_(const int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> payload{source};
-        auto request = InPathSwitchSimulator::makeSwitchRequest(
+        auto request = InPathBmtProtocol::makeRequest(
             tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
         MEASURE_EXECUTION_TIME(send(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
         return;
@@ -146,9 +149,9 @@ void Comm::serverSendImpl_(const int64_t &source, int width, int tag) {
 }
 
 void Comm::serverSendImpl_(const std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
-        auto request = InPathSwitchSimulator::makeSwitchRequest(
+        auto request = InPathBmtProtocol::makeRequest(
             tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
         MEASURE_EXECUTION_TIME(send(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
         return;
@@ -165,11 +168,11 @@ void Comm::serverSendImpl_(const std::string &source, int tag) {
 }
 
 void Comm::serverReceiveImpl_(int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> envelope;
         MEASURE_EXECUTION_TIME(receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        auto payload = InPathSwitchSimulator::unpackPayload(envelope);
+        auto payload = InPathBmtProtocol::unpackPayload(envelope);
         if (payload.empty()) {
             throw std::runtime_error("Missing scalar payload in in-path switch envelope.");
         }
@@ -182,11 +185,11 @@ void Comm::serverReceiveImpl_(int64_t &source, int width, int tag) {
 }
 
 void Comm::serverReceiveImpl_(std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> envelope;
         MEASURE_EXECUTION_TIME(receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag));
-        source = InPathSwitchSimulator::unpackPayload(envelope);
+        source = InPathBmtProtocol::unpackPayload(envelope);
         return;
     }
     try {
@@ -325,10 +328,10 @@ AbstractRequest *Comm::serverReceiveAsync(std::vector<int64_t> &target, int coun
 }
 
 AbstractRequest *Comm::serverSendAsyncImpl_(const int64_t &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         std::vector<int64_t> payload{source};
-        auto request = InPathSwitchSimulator::makeSwitchRequest(
+        auto request = InPathBmtProtocol::makeRequest(
             tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), payload);
         return sendAsync(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
     }
@@ -340,9 +343,9 @@ AbstractRequest *Comm::serverSendAsyncImpl_(const int64_t &source, int width, in
 }
 
 AbstractRequest *Comm::serverSendAsyncImpl_(const std::vector<int64_t> &source, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
-        auto request = InPathSwitchSimulator::makeSwitchRequest(
+        auto request = InPathBmtProtocol::makeRequest(
             tag, IntermediateDataSupport::consumeBitwiseBmtRequestCount(), source);
         return sendAsync(request, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
     }
@@ -362,12 +365,12 @@ AbstractRequest *Comm::serverSendAsyncImpl_(const std::string &source, int tag) 
 }
 
 AbstractRequest *Comm::serverReceiveAsyncImpl_(int64_t &target, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         return new FutureRequestWrapper(std::async(std::launch::async, [&target, physicalTag]() {
             std::vector<int64_t> envelope;
             receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-            auto payload = InPathSwitchSimulator::unpackPayload(envelope);
+            auto payload = InPathBmtProtocol::unpackPayload(envelope);
             if (payload.empty()) {
                 throw std::runtime_error("Missing scalar payload in in-path switch envelope.");
             }
@@ -382,12 +385,12 @@ AbstractRequest *Comm::serverReceiveAsyncImpl_(int64_t &target, int width, int t
 }
 
 AbstractRequest *Comm::serverReceiveAsyncImpl_(std::vector<int64_t> &target, int count, int width, int tag) {
-    if (InPathSwitchSimulator::shouldRouteServerTraffic()) {
+    if (InPathBmtProtocol::shouldRouteServerTraffic()) {
         const int physicalTag = inPathPhysicalTag();
         return new FutureRequestWrapper(std::async(std::launch::async, [&target, count, physicalTag]() {
             std::vector<int64_t> envelope;
             receive(envelope, 64, Conf::IN_PATH_SWITCH_RANK, physicalTag);
-            auto payload = InPathSwitchSimulator::unpackPayload(envelope);
+            auto payload = InPathBmtProtocol::unpackPayload(envelope);
             if (count >= 0 && static_cast<int>(payload.size()) > count) {
                 payload.resize(count);
             }

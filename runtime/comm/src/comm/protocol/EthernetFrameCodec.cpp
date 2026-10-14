@@ -1,4 +1,4 @@
-#include "comm/transport/peer/TapFrameCodec.h"
+#include "comm/protocol/EthernetFrameCodec.h"
 
 #include "comm/protocol/PilotWireMessageCodec.h"
 
@@ -13,14 +13,14 @@ void appendBytes(std::vector<uint8_t> &out, const void *data, size_t size) {
 }
 }
 
-std::array<uint8_t, 6> TapFrameCodec::macForRank(int rank) {
+std::array<uint8_t, 6> EthernetFrameCodec::macForRank(int rank) {
     std::array<uint8_t, 6> mac{};
     std::memcpy(mac.data(), kPilotMacPrefix, sizeof(kPilotMacPrefix));
     mac[5] = static_cast<uint8_t>(rank & 0xff);
     return mac;
 }
 
-std::vector<uint8_t> TapFrameCodec::encode(const RoutedPeerMessage &message) {
+std::vector<uint8_t> EthernetFrameCodec::encode(const PilotMessage &message) {
     const auto dst = macForRank(message.receiverRank);
     const auto src = macForRank(message.senderRank);
     auto payload = PilotWireMessageCodec::encode(message);
@@ -35,7 +35,7 @@ std::vector<uint8_t> TapFrameCodec::encode(const RoutedPeerMessage &message) {
     return frame;
 }
 
-bool TapFrameCodec::decode(const uint8_t *data, size_t size, RoutedPeerMessage &message) {
+bool EthernetFrameCodec::decode(const uint8_t *data, size_t size, PilotMessage &message) {
     if (size < ETHERNET_HEADER_SIZE + PilotWireMessageCodec::HEADER_SIZE) {
         return false;
     }
@@ -43,6 +43,6 @@ bool TapFrameCodec::decode(const uint8_t *data, size_t size, RoutedPeerMessage &
     if (ethertype != ETHERTYPE) {
         return false;
     }
-
-    return PilotWireMessageCodec::decode(data + ETHERNET_HEADER_SIZE, size - ETHERNET_HEADER_SIZE, message);
+    return PilotWireMessageCodec::decode(data + ETHERNET_HEADER_SIZE,
+                                         size - ETHERNET_HEADER_SIZE, message);
 }

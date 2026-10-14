@@ -1,7 +1,7 @@
 #ifndef PILOT_WIRE_MESSAGE_CODEC_H
 #define PILOT_WIRE_MESSAGE_CODEC_H
 
-#include "comm/transport/peer/RoutedPeerTransport.h"
+#include "comm/protocol/PilotMessage.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -16,9 +16,9 @@ public:
     static constexpr uint32_t FLAG_SWITCH_REQUEST = 1u << 0;
     static constexpr uint32_t FLAG_SWITCH_ENVELOPE = 1u << 1;
 
-    static std::vector<uint8_t> encode(const RoutedPeerMessage &message);
+    static std::vector<uint8_t> encode(const PilotMessage &message);
 
-    static bool decode(const uint8_t *data, size_t size, RoutedPeerMessage &message);
+    static bool decode(const uint8_t *data, size_t size, PilotMessage &message);
 
     static bool payloadBytesFromHeader(const uint8_t *data, size_t size, size_t &payloadBytes);
 };

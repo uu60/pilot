@@ -48,7 +48,8 @@ This avoids complex packed-BMT accounting and makes bundle usage deterministic.
 
 ## Build
 
-PILOT uses CMake and MPI.
+PILOT uses CMake, MPI, and OpenSSL 3.x. OpenSSL supplies the AES-128-GCM
+implementation used by the encrypted software-switch BMT path.
 
 ```bash
 cd pilot
@@ -58,30 +59,83 @@ cmake --build build -j
 
 ## Transport Programming Model
 
-PILOT has two communication implementations behind the `Comm` interface:
+PILOT has three concrete communication implementations behind the `Comm` interface:
 
-- `MpiComm`: the original four-rank MPI software switch baseline.
-- `RoutedComm`: the newer communication path used for standalone software switch, TAP switch simulation, and BMv2 experiments.
+- `MpiComm`: the original four-rank MPI software-switch baseline.
+- `TcpComm`: endpoint TCP connections to the built-in software switch.
+- `L2Comm`: Linux `AF_PACKET` communication over TAP/veth or a physical Ethernet interface for an external C++ switch, BMv2/P4, or future FPGA.
 
-`RoutedComm` sends `RoutedPeerMessage` objects through a `RoutedPeerTransport` backend. The transport backend owns only the byte/frame transport mechanism; it should not contain MPC or BMT semantics.
+The endpoint socket and receive-loop code lives directly in each `Comm` implementation; there is no separate transport class hierarchy. Shared wire data is represented by `PilotMessage`, queued by `MessageInbox`, encoded by `PilotWireMessageCodec`, and wrapped in Ethernet by `EthernetFrameCodec` for `L2Comm`.
 
-Current transport roles:
+Switch behavior is separate from endpoint communication:
 
-- `TcpSoftwareSwitchTransport`: software baseline transport. All routed messages go through one TCP software switch process. The switch forwards ordinary messages and only appends BMT when it sees a server-to-server Pilot switch request.
-- `TapRoutedPeerTransport`: Linux `AF_PACKET`/raw Ethernet transport. Pilot ranks bind TAP/veth interfaces and send Ethernet frames to the peer rank. The external switch process is selected by the network topology, not by pilot code.
-- `TapFrameCodec`: Ethernet wrapper for `PilotWireMessageCodec`.
-- `PilotWireMessageCodec`: shared Pilot wire header used by TCP software switch, TAP switch, and BMv2/P4.
+- `MpiSoftwareSwitch` owns the MPI rank-3 loop.
+- `TcpSoftwareSwitch` accepts and forwards the three TCP endpoint connections.
+- `SoftwareBmtEngine` generates, shares, encrypts, and appends BMTs for all C++ switch implementations.
+- `InPathBmtProtocol` constructs endpoint requests and authenticates/decrypts endpoint responses.
 
 The intended programming rule is:
 
 ```text
 pilot endpoint code sends to the peer rank
-transport code serializes and transmits the message
+the selected Comm backend serializes and transmits the message
 switch code decides whether to append BMT
 pilot endpoint code must not explicitly request BMT from a switch
 ```
 
 This keeps the software switch, C++ TAP switch, BMv2, and future FPGA direction aligned: the switch is in the path, while the two compute parties treat communication as peer-to-peer.
+
+## Encrypted BMT Trailer
+
+The C++ software-switch paths encrypt each destination server's BMT share
+before appending it to the peer payload. The clear `e/f` payload remains on the
+wire. Each encrypted BMT entry has the same 52-byte shape as the FPGA RTL:
+
+```text
+IV (12 bytes) | AES-GCM ciphertext for a_i,b_i,c_i (24 bytes) | tag (16 bytes)
+```
+
+Server 0 and server 1 use independent simulation keys. The keys currently
+mirror the placeholder RTL keys and model the eventual per-server channels;
+they are not production key provisioning. The receiving server authenticates
+and decrypts its entries before placing raw shares into its lane-local BMT
+queue. AES-GCM authentication binds the destination, lane, operator tag, entry
+index, and the clear `e/f` payload, so an encrypted entry cannot be moved to a
+different request or paired with a modified payload.
+
+The RTL currently authenticates the clear payload with its response HMAC
+instead of AES-GCM AAD. This difference does not change the 52-byte encrypted
+BMT size used by the timing model, but a direct C++ endpoint-to-FPGA deployment
+will need one common authentication convention and the planned key
+provisioning interface.
+
+## FPGA-Calibrated Timing Traces
+
+The software switch can attach FPGA-derived virtual cycle estimates to each
+request and write them to CSV. The model records estimates only; it does not
+sleep or add host scheduler delay to the MPC run.
+
+```bash
+build/launcher/pilot_routed_launcher \
+  --program=build/db/benchmark/pilot_db_sort \
+  --rows=8 \
+  --simulation_level=software \
+  --in_path_hw_clock_hz=200000000 \
+  --in_path_hw_bmt_pair_cycles=0 \
+  --in_path_hw_request_fixed_cycles=0 \
+  --in_path_hw_request_block_cycles=0 \
+  --in_path_hw_payload_word_cycles=0 \
+  --in_path_hw_bmt_append_cycles=0 \
+  --in_path_hw_response_fixed_cycles=0 \
+  --in_path_hw_response_block_cycles=0 \
+  --in_path_hw_axis_beat_cycles=0 \
+  --in_path_timing_trace=pilot-timing.csv
+```
+
+Replace the zero cycle values with FPGA measurements. The trace separates
+background BMT-pair pre-generation cycles from request service cycles so a
+later discrete-event simulator can model FIFO fill, depletion, and contention
+without treating pre-generation as a synchronous cost on every request.
 
 ## Run Modes
 
@@ -96,22 +150,21 @@ mpirun -np 4 build/db/benchmark/pilot_db_sort \
   --in_path_bmt_bundle_size=64
 ```
 
-### Routed TCP Software Switch
+### TCP Comm with Software Switch
 
-This mode does not use MPI for process orchestration. The launcher starts `switch`, `server0`, `server1`, and `client`. All routed messages go through `TcpSoftwareSwitchTransport`.
+This mode does not use MPI for process orchestration. The launcher starts `switch`, `server0`, `server1`, and `client`. All messages use `TcpComm` and pass through `TcpSoftwareSwitch`.
 
 ```bash
 build/launcher/pilot_routed_launcher \
   --program=build/db/benchmark/pilot_db_sort \
   --rows=8 \
   --simulation_level=software \
-  --routed_network=tcp \
   --in_path_max_parallelism=2 \
   --in_path_bmt_bundle_size=16 \
   --tcp_switch_port=19000
 ```
 
-### Routed TAP with C++ Switch Simulator
+### L2 Comm with C++ Switch Simulator
 
 This mode starts the switch outside pilot. Pilot ranks only bind TAP/veth endpoint interfaces and send to peer ranks.
 
@@ -139,17 +192,16 @@ build/launcher/pilot_routed_launcher \
   --program=build/db/benchmark/pilot_db_sort \
   --rows=8 \
   --simulation_level=simulator \
-  --routed_network=tap \
-  --routed_tap_server0=tap0 \
-  --routed_tap_server1=tap1 \
-  --routed_tap_client=tap2 \
+  --l2_server0=tap0 \
+  --l2_server1=tap1 \
+  --l2_client=tap2 \
   --in_path_max_parallelism=2 \
   --in_path_bmt_bundle_size=16
 ```
 
-The C++ TAP switch is the current full reference for external transparent switch behavior. It calls `InPathSwitchSimulator::forwardRequest()` and appends simulated BMT shares.
+The C++ TAP switch is the current full reference for external transparent switch behavior. It calls `SoftwareBmtEngine::processRequest()` and appends simulated BMT shares.
 
-### Routed TAP with BMv2/P4
+### L2 Comm with BMv2/P4
 
 BMv2 is started outside pilot and binds the same switch-side veth interfaces. Pilot endpoint arguments are the same as the C++ TAP switch mode.
 
@@ -188,10 +240,16 @@ Important runtime options:
 - `--in_path_max_parallelism=N`: number of fixed lanes and worker threads
 - `--in_path_bmt_bundle_size=N`: fixed BMT bundle size per lane
 - `--in_path_switch_rank=N`: switch rank, default is `3`
-- `--comm=mpi|routed`: communication implementation, normally supplied by `mpirun` or the routed launcher
+- `--comm=mpi|tcp|l2`: concrete communication implementation. The legacy `--comm=routed` spelling remains accepted and resolves through `--routed_network`.
 - `--simulation_level=software|simulator`: built-in software switch or external in-path simulator
-- `--routed_network=tcp|tap`: TCP software switch backend or TAP/raw Ethernet backend
-- `--routed_tap_server0=IFACE`, `--routed_tap_server1=IFACE`, `--routed_tap_client=IFACE`: pilot-side TAP/veth interfaces
+- `--l2_server0=IFACE`, `--l2_server1=IFACE`, `--l2_client=IFACE`: L2 interfaces for the three Pilot endpoints. The older `--routed_tap_*` spellings remain accepted.
+- `--in_path_timing_trace=PATH`: optional CSV output for virtual hardware timing estimates
+- `--in_path_hw_clock_hz=N`: FPGA clock used to convert estimated cycles to nanoseconds
+- `--in_path_hw_bmt_pair_cycles=N`: measured background cycles per paired server BMT
+- `--in_path_hw_request_fixed_cycles=N`, `--in_path_hw_request_block_cycles=N`: request parsing/authentication model
+- `--in_path_hw_payload_word_cycles=N`, `--in_path_hw_bmt_append_cycles=N`: response construction model
+- `--in_path_hw_response_fixed_cycles=N`, `--in_path_hw_response_block_cycles=N`: response authentication model
+- `--in_path_hw_axis_beat_cycles=N`: output cost per 64-byte AXI beat
 
 ## Operator Usage
 
@@ -226,6 +284,7 @@ When using in-path BMTs, run operators that require AND inside a lane worker. Th
 
 - Only Boolean batch MPC operators are supported.
 - The original MPI switch is a software baseline.
+- The C++ MPI, TCP, and TAP switch paths encrypt BMT shares with simulation-only AES-GCM keys.
 - The C++ TAP switch is the current full external simulator reference.
 - The BMv2/P4 switch is a bounded functional prototype and currently uses fake all-zero BMT data.
 - Parallelism is fixed at initialization time.
@@ -234,6 +293,7 @@ When using in-path BMTs, run operators that require AND inside a lane worker. Th
 - A single `BitwiseAndOperator` batch may not exceed the configured BMT bundle size.
 - `BitwiseMutexOperator` consumes two AND streams, so its batch size should not exceed half of the BMT bundle size.
 - Multi-column sort currently uses a packed comparison key and supports total key width up to 62 bits.
+- TPM-backed key provisioning and direct decryption of the current RTL response format are not implemented yet.
 
 ## Relationship to Parsec
 

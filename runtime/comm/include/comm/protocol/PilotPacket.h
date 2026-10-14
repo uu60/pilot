@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "intermediate/item/BitwiseBmt.h"
+#include "comm/security/BmtCrypto.h"
 
 struct PilotPacketRequest {
     int tag{};
@@ -19,13 +19,14 @@ struct PilotPacketEnvelope {
     int tag{};
     int laneId{};
     std::vector<int64_t> payload;
-    std::vector<RawBitwiseBmt> trailer;
+    std::vector<EncryptedBitwiseBmt> encryptedTrailer;
 };
 
 class PilotPacket {
 public:
     static constexpr int64_t ENVELOPE_MAGIC = 0x5041525345434550LL; // "PARSECEP" marker
     static constexpr int64_t REQUEST_MAGIC = 0x5041525352455154LL;  // "PARSREQT" marker
+    static constexpr uint64_t ENCRYPTED_TRAILER_FLAG = uint64_t{1} << 63;
 
     static std::vector<int64_t> encodeRequest(const PilotPacketRequest &packet);
 

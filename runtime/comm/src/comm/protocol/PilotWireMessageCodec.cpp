@@ -49,7 +49,7 @@ uint64_t readU64(const uint8_t *data) {
     return value;
 }
 
-uint32_t flagsForMessage(const RoutedPeerMessage &message) {
+uint32_t flagsForMessage(const PilotMessage &message) {
     if (message.type != 2 || message.words.empty()) {
         return 0;
     }
@@ -63,7 +63,7 @@ uint32_t flagsForMessage(const RoutedPeerMessage &message) {
 }
 }
 
-std::vector<uint8_t> PilotWireMessageCodec::encode(const RoutedPeerMessage &message) {
+std::vector<uint8_t> PilotWireMessageCodec::encode(const PilotMessage &message) {
     const bool isString = message.type == kStringMessage;
     const size_t payloadItems = isString ? 0 : message.words.size();
     const size_t payloadBytes = isString ? message.text.size() : message.words.size() * sizeof(int64_t);
@@ -97,7 +97,7 @@ std::vector<uint8_t> PilotWireMessageCodec::encode(const RoutedPeerMessage &mess
     return out;
 }
 
-bool PilotWireMessageCodec::decode(const uint8_t *data, size_t size, RoutedPeerMessage &message) {
+bool PilotWireMessageCodec::decode(const uint8_t *data, size_t size, PilotMessage &message) {
     size_t payloadBytes = 0;
     if (!payloadBytesFromHeader(data, size, payloadBytes)) {
         return false;

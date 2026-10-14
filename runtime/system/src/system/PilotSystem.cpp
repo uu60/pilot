@@ -1,25 +1,28 @@
 #include "system/PilotSystem.h"
 
 #include "comm/Comm.h"
-#include "comm/InPathSwitchSimulator.h"
-#include "comm/RoutedComm.h"
 #include "conf/Conf.h"
+#include "comm/switch/MpiSoftwareSwitch.h"
+#include "comm/switch/TcpSoftwareSwitch.h"
 #include "intermediate/IntermediateDataSupport.h"
 #include "parallel/LaneThreadPool.h"
 
 #include <cstdlib>
 #include <future>
+#include <stdexcept>
 #include <vector>
 
 void PilotSystem::init(int argc, char **argv) {
     Conf::init(argc, argv);
     Comm::init(argc, argv);
 
-    if (InPathSwitchSimulator::isSwitchRank()) {
-        if (RoutedComm::enabled()) {
-            RoutedComm::runSwitch();
+    if (Comm::rank() == Conf::IN_PATH_SWITCH_RANK) {
+        if (Conf::COMM_TYPE == Conf::TCP) {
+            TcpSoftwareSwitch::run();
+        } else if (Conf::COMM_TYPE == Conf::MPI) {
+            MpiSoftwareSwitch::run();
         } else {
-            InPathSwitchSimulator::run();
+            throw std::runtime_error("L2Comm uses an external switch and has no Pilot switch role.");
         }
         Comm::finalize();
         std::exit(0);
@@ -33,10 +36,8 @@ void PilotSystem::init(int argc, char **argv) {
 
 void PilotSystem::finalize() {
     if (Comm::isServer()) {
-        if (Conf::COMM_TYPE == Conf::ROUTED) {
-            RoutedComm::sendShutdown();
-        } else {
-            InPathSwitchSimulator::sendShutdown();
+        if (Conf::COMM_TYPE == Conf::MPI) {
+            MpiSoftwareSwitch::sendShutdown();
         }
     }
     Comm::finalize();
